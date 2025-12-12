@@ -155,7 +155,7 @@ def _parse_rates(df):
             RateRow(
                 start=_to_date(r["С"]),
                 end=_to_date(r["По"]),
-                days_in_year=int(r["Дней в году"]),
+                days_in_year=int(r["дней в году"]),
                 rate=float(r["Ставка"]) / 100,
             )
         )
