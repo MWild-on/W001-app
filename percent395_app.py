@@ -278,7 +278,16 @@ def _build_pdf(
     font_name = _ensure_cyrillic_font()
 
     styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name="RU_Title", parent=styles["Title"], fontName=font_name, fontSize=14))
+    
+      styles.add(ParagraphStyle(
+        name="RU_Title",
+        fontName=font_name,
+        fontSize=12,
+        leading=14,
+        alignment=1,      # CENTER
+        spaceAfter=10,
+    ))
+    
     styles.add(ParagraphStyle(name="RU_Normal", parent=styles["Normal"], fontName=font_name, fontSize=10))
 
     buf = io.BytesIO()
