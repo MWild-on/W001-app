@@ -279,7 +279,7 @@ def _build_pdf(
 
     styles = getSampleStyleSheet()
     
-      styles.add(ParagraphStyle(
+    styles.add(ParagraphStyle(
         name="RU_Title",
         fontName=font_name,
         fontSize=12,
