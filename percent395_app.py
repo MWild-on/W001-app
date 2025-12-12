@@ -299,9 +299,9 @@ def _build_pdf(
         "Период по", 
         "Дней", 
         "Ставка, %",
-        Paragraph ("Сумма<br/>платежа"),
-        "Дата<br/>платежа", 
-        "Основной<br/>долг",
+        Paragraph ("Сумма<br/>платежа", styles["RU_Normal"]),
+        Paragraph ("Дата<br/>платежа", styles["RU_Normal"]),
+        Paragraph ("Основной<br/>долг",styles["RU_Normal"]),
         "Формула", 
         "Проценты",
     ]
