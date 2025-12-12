@@ -16,6 +16,26 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
 
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.styles import ParagraphStyle
+
+def _ensure_cyrillic_font():
+    # DejaVuSans обычно есть в Linux/Streamlit Cloud
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont("DejaVuSans", p))
+            return "DejaVuSans"
+    # если не нашли – пусть упадёт понятной ошибкой
+    raise FileNotFoundError("Не найден шрифт DejaVuSans.ttf для кириллицы")
+
+
   
 # =========================
 # Core: percent395_app
@@ -75,19 +95,28 @@ def percent395_app():
         return
 
     try:
-        result_zip_bytes = run_calculation(
-            uploaded.getvalue(),
-            date_from,
-            date_to
-        )
-
+        zip_bytes, xlsx_bytes = run_calculation(uploaded.getvalue(), date_from, date_to)
+        
         st.success("Готово. Скачайте результат.")
-        st.download_button(
-            "Скачать ZIP (Excel + PDF по договорам)",
-            data=result_zip_bytes,
-            file_name="percent395_outputs.zip",
-            mime="application/zip",
-        )
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            st.download_button(
+                "Скачать ZIP (Excel + PDF по договорам)",
+                data=zip_bytes,
+                file_name="percent395_outputs.zip",
+                mime="application/zip",
+                use_container_width=True,
+            )
+        with c2:
+            st.download_button(
+                "Скачать Excel",
+                data=xlsx_bytes,
+                file_name="percent395_result.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
 
     except Exception as e:
         st.exception(e)
@@ -249,6 +278,11 @@ def _compute_contract(
 
 
 def _build_pdf(
+    font_name = _ensure_cyrillic_font()
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="RU_Title", parent=styles["Title"], fontName=font_name))
+    styles.add(ParagraphStyle(name="RU_Normal", parent=styles["Normal"], fontName=font_name))
+
     contract_no: str,
     contract_date: Optional[dt.date],
     fio: str,
@@ -265,7 +299,7 @@ def _build_pdf(
 
     cd = _fmt_date(contract_date) if contract_date else ""
     title = f"Расчет процентов по ст. 395 ГК РФ по договору №{contract_no} от {cd} {fio} на {_fmt_date(date_to)} г."
-    story.append(Paragraph(title, styles["Title"]))
+    story.append(Paragraph(title, styles["RU_Title"]))
     story.append(Spacer(1, 6 * mm))
 
     header = ["№", "Период c", "Период по", "Дней", "Ставка, %", "Сумма платежа", "Дата платежа", "Основной долг", "Формула", "Проценты, ₽"]
@@ -313,14 +347,14 @@ def _build_pdf(
             [
                 ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 8),
+                ("FONT", (0, 0), (-1, 0), "DejaVu", 8),
                 ("FONTSIZE", (0, 0), (-1, -1), 7),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("ALIGN", (0, 0), (-1, 0), "CENTER"),
                 ("ALIGN", (0, 1), (4, -1), "CENTER"),
                 ("ALIGN", (5, 1), (7, -1), "RIGHT"),
                 ("ALIGN", (9, 1), (9, -1), "RIGHT"),
-                ("FONT", (8, -1), (9, -1), "Helvetica-Bold", 8),
+                ("FONT", (8, -1), (9, -1), "DejaVu", 8),
                 ("BACKGROUND", (8, -1), (9, -1), colors.whitesmoke),
             ]
         )
@@ -442,7 +476,9 @@ def run_calculation(excel_bytes: bytes, date_from: dt.date, date_to: dt.date) ->
         for cn, pdf_bytes in pdfs.items():
             z.writestr(f"{cn}.pdf", pdf_bytes)
 
-    return zip_buf.getvalue()
+    zip_bytes = zip_buf.getvalue()
+  return zip_bytes, out_xlsx_bytes
+
 
 
 if __name__ == "__main__":
