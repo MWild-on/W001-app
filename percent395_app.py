@@ -240,9 +240,14 @@ def _build_pdf_bytes(
 
     data.append(["", "", "", "", "", "", "", "", "Итого:", _fmt_money_ru(total_interest)])
 
+    # Table width: stretch to full available width (same as header block)
+    _w = [10, 22, 22, 14, 18, 22, 20, 22, 48, 22]  # relative weights (mm-based)
+    _sumw = sum(_w)
+    col_widths = [doc.width * (w / _sumw) for w in _w]
+
     tbl = Table(
         data,
-        colWidths=[10*mm, 22*mm, 22*mm, 14*mm, 18*mm, 22*mm, 20*mm, 22*mm, 48*mm, 22*mm],
+        colWidths=col_widths,
         repeatRows=1,
     )
 
@@ -282,24 +287,60 @@ def run():
     uploaded = st.file_uploader("Файл Excel", type=["xlsx", "xls"])
     c1, c2 = st.columns(2)
     with c1:
-        date_from = st.date_input("Дата от (дата начала расчета)", key="p395_date_from", value=st.session_state.get("p395_date_from", date.today()))
+        date_from = st.date_input(
+            "Дата от (дата начала расчета)",
+            value=st.session_state.get("p395_date_from", date.today()),
+            key="p395_date_from_ui",
+        )
     with c2:
-        date_to = st.date_input("Дата до (дата до которой производится расчет)", key="p395_date_to", value=st.session_state.get("p395_date_to", date.today()))
+        date_to = st.date_input(
+            "Дата до (дата до которой производится расчет)",
+            value=st.session_state.get("p395_date_to", date.today()),
+            key="p395_date_to_ui",
+        )
+
+    # сохраняем выбранные даты
+    st.session_state["p395_date_from"] = date_from
+    st.session_state["p395_date_to"] = date_to
+
+    calc_btn = st.button("Рассчитать")
+
+    def _render_outputs():
+        if st.session_state.get("p395_done") and st.session_state.get("p395_excel_bytes") and st.session_state.get("p395_zip_bytes"):
+            st.success(f"Готово. Договоров: {st.session_state.get('p395_contracts', 0)}")
+
+            st.download_button(
+                "Скачать Excel с «Сума по 395»",
+                data=st.session_state["p395_excel_bytes"],
+                file_name="395_result.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+            st.download_button(
+                "Скачать PDF-расчеты (ZIP)",
+                data=st.session_state["p395_zip_bytes"],
+                file_name="395_pdfs.zip",
+                mime="application/zip",
+            )
+
+            st.caption("PDF формируется по примеру: один файл на договор, имя = номер договора.")
+
+    # Если расчет уже делали — показываем кнопки скачивания всегда,
+    # даже после клика по download_button (Streamlit делает rerun).
+    if not calc_btn:
+        if st.session_state.get("p395_done"):
+            _render_outputs()
+        else:
+            st.info('Загрузите файл, выберите даты и нажмите «Рассчитать».')
+        return
 
     if uploaded is None:
+        st.error("Загрузите Excel-файл.")
         return
 
     if date_from > date_to:
         st.error("Дата от не может быть больше Даты до.")
         return
-
-    calc_btn = st.button("Рассчитать")
-    
-    if not calc_btn:
-        st.info("Задайте параметры и нажмите «Рассчитать»")
-        return
-
-
     try:
         xls = pd.ExcelFile(uploaded)
         if "Ставка" not in xls.sheet_names or "Список" not in xls.sheet_names:
@@ -390,37 +431,25 @@ def run():
 
         df_out = pd.DataFrame(out_rows)
 
-        st.success(f"Готово. Договоров: {len(df_out)}")
-
-        # -------- Excel output (both sheets)
+        # -------- Excel + PDF outputs (persist in session_state so buttons не исчезают)
         excel_buf = io.BytesIO()
         with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
             df_rate.to_excel(writer, sheet_name="Ставка", index=False)
             df_out.to_excel(writer, sheet_name="Список", index=False)
-        excel_buf.seek(0)
+        excel_bytes = excel_buf.getvalue()
 
-        st.download_button(
-            "Скачать Excel с «Сума по 395»",
-            data=excel_buf,
-            file_name="395_result.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-        # -------- ZIP of PDFs
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for fname, b in pdf_files:
                 zf.writestr(fname, b)
-        zip_buf.seek(0)
+        zip_bytes = zip_buf.getvalue()
 
-        st.download_button(
-            "Скачать PDF-расчеты (ZIP)",
-            data=zip_buf,
-            file_name="395_pdfs.zip",
-            mime="application/zip",
-        )
+        st.session_state["p395_excel_bytes"] = excel_bytes
+        st.session_state["p395_zip_bytes"] = zip_bytes
+        st.session_state["p395_contracts"] = len(df_out)
+        st.session_state["p395_done"] = True
 
-        st.caption("PDF формируется по примеру: один файл на договор, имя файла — номер договора.")
+        _render_outputs()
 
     except Exception as e:
         st.exception(e)
