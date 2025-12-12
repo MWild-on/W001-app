@@ -27,12 +27,13 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 # ----------------------------
 
 def _register_cyrillic_font():
-    """Register a font that supports Cyrillic (best effort)."""
+    """Register fonts that support Cyrillic (best effort). Returns (regular_font, bold_font)."""
     try:
         pdfmetrics.registerFont(TTFont("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
-        return "DejaVuSans"
+        pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
+        return "DejaVuSans", "DejaVuSans-Bold"
     except Exception:
-        return "Helvetica"
+        return "Helvetica", "Helvetica-Bold"
 
 
 def _to_date(x) -> date:
@@ -155,7 +156,7 @@ def _build_pdf_bytes(
     calc_rows: List[Dict[str, Any]],
     total_interest: float,
 ) -> bytes:
-    font = _register_cyrillic_font()
+    font, font_bold = _register_cyrillic_font()
     styles = getSampleStyleSheet()
     base = ParagraphStyle(
         "base",
@@ -167,8 +168,10 @@ def _build_pdf_bytes(
     title = ParagraphStyle(
         "title",
         parent=base,
+        fontName=font_bold,
         fontSize=11,
         leading=14,
+        alignment=1,
         spaceAfter=6,
     )
 
@@ -207,9 +210,9 @@ def _build_pdf_bytes(
         "Период\nпросрочки по",
         "Коли\nчеств\nо\nдней",
         "Ставка в\n%",
-        "Сумма платежа",
-        "Дата платежа",
-        "Основной долг",
+        "Сумма\nплатежа",
+        "Дата\nплатежа",
+        "Основной\nдолг",
         "Формула",
         "Сумма\nпроцентов",
     ]]
@@ -244,6 +247,7 @@ def _build_pdf_bytes(
     )
 
     tbl.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (-1, 0), font_bold),
         ("FONTNAME", (0, 0), (-1, -1), font),
         ("FONTSIZE", (0, 0), (-1, -1), 8),
         ("ALIGN", (0, 0), (-1, 0), "CENTER"),
@@ -287,6 +291,11 @@ def run():
 
     if date_from > date_to:
         st.error("Дата от не может быть больше Даты до.")
+        return
+
+
+    if not calc_btn:
+        st.info('Нажмите «Рассчитать» для выполнения расчета.')
         return
 
     try:
