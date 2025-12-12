@@ -1,5 +1,5 @@
 
-# percent395_app.py — Расчет процентов по ст. 395 
+# percent395_app.py — Расчет процентов по ст. 395 ГК РФ
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -175,7 +175,7 @@ def _build_pdf_bytes(
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
-        pagesize=A4,
+        pagesize=landscape(A4),
         leftMargin=15*mm,
         rightMargin=15*mm,
         topMargin=15*mm,
@@ -278,9 +278,9 @@ def run():
     uploaded = st.file_uploader("Файл Excel", type=["xlsx", "xls"])
     c1, c2 = st.columns(2)
     with c1:
-        date_from = st.date_input("Дата от (дата начала расчета)", value=date.today())
+        date_from = st.date_input("Дата от (дата начала расчета)", key="p395_date_from", value=st.session_state.get("p395_date_from", date.today()))
     with c2:
-        date_to = st.date_input("Дата до (дата до которой производится расчет)", value=date.today())
+        date_to = st.date_input("Дата до (дата до которой производится расчет)", key="p395_date_to", value=st.session_state.get("p395_date_to", date.today()))
 
     if uploaded is None:
         return
@@ -299,6 +299,19 @@ def run():
         df_list = pd.read_excel(xls, sheet_name="Список")
         periods = _load_rate_periods(df_rate)
 
+        # Подставляем разумные даты по умолчанию из таблицы ставок,
+        # чтобы расчет не давал 0 из-за отсутствия пересечений.
+        try:
+            min_rate_date = min(p.start for p in periods)
+            max_rate_date = max(p.end for p in periods)
+            if "p395_date_from" not in st.session_state:
+                st.session_state["p395_date_from"] = min_rate_date
+            if "p395_date_to" not in st.session_state:
+                st.session_state["p395_date_to"] = max_rate_date
+        except Exception:
+            pass
+
+
         # Normalize list columns
         list_col_map = {c: c.strip().replace("\xa0", " ") for c in df_list.columns}
         df_list = df_list.rename(columns=list_col_map)
@@ -314,6 +327,30 @@ def run():
         if "Дата договора" not in df_list.columns:
             df_list["Дата договора"] = pd.NaT
 
+
+        # Проверяем покрытие диапазона таблицей ставок и при необходимости
+        # считаем только в пределах доступных ставок (с предупреждением).
+        min_rate_date = min(p.start for p in periods) if periods else None
+        max_rate_date = max(p.end for p in periods) if periods else None
+
+        date_from_eff = date_from
+        date_to_eff = date_to
+
+        if min_rate_date and date_from_eff < min_rate_date:
+            date_from_eff = min_rate_date
+        if max_rate_date and date_to_eff > max_rate_date:
+            date_to_eff = max_rate_date
+
+        if (date_from_eff != date_from) or (date_to_eff != date_to):
+            st.warning(
+                f"Диапазон дат частично вне таблицы «Ставка». "
+                f"Расчет выполнен за период {date_from_eff.strftime('%d.%m.%Y')}–{date_to_eff.strftime('%d.%m.%Y')}."
+            )
+
+        if date_from_eff > date_to_eff:
+            st.error("Выбранный период не пересекается с таблицей «Ставка».")
+            return
+
         out_rows = []
         pdf_files: List[Tuple[str, bytes]] = []
 
@@ -324,7 +361,7 @@ def run():
             contract_date = None if pd.isna(cdate) else _to_date(cdate)
 
             principal = float(row.get("Сумма ОД", 0) or 0)
-            total_interest, calc_rows = _calc_395_for_sum(principal, date_from, date_to, periods)
+            total_interest, calc_rows = _calc_395_for_sum(principal, date_from_eff, date_to_eff, periods)
 
             out_row = dict(row)
             out_row["Сума по 395"] = total_interest
@@ -334,7 +371,7 @@ def run():
                 contract_no=contract_no,
                 contract_date=contract_date,
                 fio=fio,
-                as_of=date_to,
+                as_of=date_to_eff,
                 calc_rows=calc_rows,
                 total_interest=total_interest,
             )
