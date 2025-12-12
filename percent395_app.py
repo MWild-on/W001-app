@@ -78,18 +78,26 @@ def percent395_app():
         return
 
     try:
-        zip_bytes, xlsx_bytes = run_calculation(uploaded.getvalue(), date_from, date_to)
-
+        # 1) Считаем только один раз, сохраняем в session_state
+        if "p395_zip" not in st.session_state or "p395_xlsx" not in st.session_state:
+            zip_bytes, xlsx_bytes = run_calculation(uploaded.getvalue(), date_from, date_to)
+            st.session_state["p395_zip"] = zip_bytes
+            st.session_state["p395_xlsx"] = xlsx_bytes
+        else:
+            zip_bytes = st.session_state["p395_zip"]
+            xlsx_bytes = st.session_state["p395_xlsx"]
+    
         st.success("Готово. Скачайте результат.")
-
+    
         c1, c2 = st.columns(2)
         with c1:
             st.download_button(
-                "Скачать ZIP (Excel + PDF по договорам)",
+                "Скачать ZIP (только PDF)",
                 data=zip_bytes,
-                file_name="percent395_outputs.zip",
+                file_name="percent395_pdfs.zip",
                 mime="application/zip",
                 use_container_width=True,
+                key="download_zip_pdfs",
             )
         with c2:
             st.download_button(
@@ -98,10 +106,12 @@ def percent395_app():
                 file_name="percent395_result.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
+                key="download_excel_395",
             )
-
+    
     except Exception as e:
         st.exception(e)
+
 
 
 # =========================
@@ -557,7 +567,6 @@ def run_calculation(excel_bytes: bytes, date_from: dt.date, date_to: dt.date) ->
     # pack zip
     zip_buf = io.BytesIO()
     with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        z.writestr("percent395_result.xlsx", out_xlsx_bytes)
         for cn, pdf_bytes in pdfs.items():
             z.writestr(f"{cn}.pdf", pdf_bytes)
 
