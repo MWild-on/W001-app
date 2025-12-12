@@ -75,7 +75,7 @@ def main():
     st.sidebar.title("Навигация")
     page = st.sidebar.radio(
         "",
-        ("Конвертер", "Индексация", "Создание выписки"),
+        ("Конвертер", "Индексация", "Создание выписки", "Расчет % по 395 статье"),
     )
 
     if page == "Конвертер":
@@ -84,6 +84,8 @@ def main():
         indexation_app.run()
     elif page == "Создание выписки":
         statement_app.run()
+    elif page == "Расчет % по 395 статье":
+        percent395_app.run()
 
 
 if __name__ == "__main__":
