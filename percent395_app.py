@@ -296,8 +296,9 @@ def run():
     calc_btn = st.button("Рассчитать")
     
     if not calc_btn:
-        st.info('Нажмите «Рассчитать» для выполнения расчета.')
+        st.info("Задайте параметры и нажмите «Рассчитать»")
         return
+
 
     try:
         xls = pd.ExcelFile(uploaded)
