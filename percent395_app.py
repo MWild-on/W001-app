@@ -179,23 +179,28 @@ def _fmt_money(x: float) -> str:
 
 
 def _ensure_cyrillic_font() -> str:
+
     candidates = [
-        "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+        ("LiberationSerif", "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf"),
+        ("LiberationSerif", "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf"),
+
+        ("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        ("DejaVuSans", "/usr/share/fonts/dejavu/DejaVuSans.ttf"),
+
+        ("FreeSans", "/usr/share/fonts/truetype/freefont/FreeSans.ttf"),
     ]
 
-    for p in candidates:
-        if os.path.exists(p):
-            if "LiberationSerif" not in pdfmetrics.getRegisteredFontNames():
-                pdfmetrics.registerFont(
-                    TTFont("LiberationSerif", p)
-                )
-            return "LiberationSerif"
+    for font_name, path in candidates:
+        if os.path.exists(path):
+            if font_name not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont(font_name, path))
+            return font_name
 
     raise FileNotFoundError(
-        "Не найден шрифт LiberationSerif. Установите пакет fonts-liberation"
+        "Не найден шрифт с кириллицей. "
+        "Положите TTF в папку проекта (например fonts/DejaVuSans.ttf) "
+        "и добавьте его в список candidates."
     )
-
 
 
 def _compute_contract(
