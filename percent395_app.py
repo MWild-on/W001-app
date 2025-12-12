@@ -1,455 +1,420 @@
-
-# percent395_app.py — Расчет процентов по ст. 395 ГК РФ
-
-from __future__ import annotations
-
 import io
-import re
+import os
 import zipfile
+import math
+import datetime as dt
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
-from typing import List, Tuple, Dict, Any
+from typing import Dict, List, Tuple, Optional
 
 import pandas as pd
+import openpyxl
 import streamlit as st
 
+from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import mm
 
 
-# ----------------------------
-# Helpers
-# ----------------------------
-
-def _register_cyrillic_font():
-    """Register fonts that support Cyrillic (best effort). Returns (regular_font, bold_font)."""
-    try:
-        pdfmetrics.registerFont(TTFont("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
-        pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
-        return "DejaVuSans", "DejaVuSans-Bold"
-    except Exception:
-        return "Helvetica", "Helvetica-Bold"
-
-
-def _to_date(x) -> date:
-    if isinstance(x, date) and not isinstance(x, datetime):
-        return x
-    if isinstance(x, datetime):
-        return x.date()
-    return pd.to_datetime(x).date()
-
-
-def _days_inclusive(d1: date, d2: date) -> int:
-    return (d2 - d1).days + 1
-
-
-def _fmt_money_ru(x: float) -> str:
-    # 15000.00 -> "15 000,00"
-    s = f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", " ")
-    return s
-
-
-def _fmt_percent_ru(rate_decimal: float) -> str:
-    # 0.21 -> "21,00%"
-    return f"{rate_decimal*100:,.2f}%".replace(",", "X").replace(".", ",").replace("X", " ")
-
-
-def _safe_filename(s: str) -> str:
-    s = str(s).strip()
-    s = re.sub(r'[\\/:*?"<>|]+', "_", s)
-    return s or "file"
-
+# =========================
+# Core: percent395_app
+# =========================
 
 @dataclass
-class RatePeriod:
-    start: date
-    end: date
+class RateRow:
+    start: dt.date
+    end: dt.date
     days_in_year: int
-    rate: float  # decimal, e.g. 0.21
+    rate: float  # decimal: 0.16 == 16%
 
 
-def _load_rate_periods(df_rate: pd.DataFrame) -> List[RatePeriod]:
-    # Expect columns: 'С', 'По', 'дней в году', 'ставка, %' (maybe with NBSP)
-    col_map = {c: c.strip().replace("\xa0", " ") for c in df_rate.columns}
-    df_rate = df_rate.rename(columns=col_map)
+def percent395_app():
+    st.set_page_config(page_title="395 ГК РФ", layout="wide")
+    st.title("Начисление процентов по ст. 395 ГК РФ")
 
-    # tolerant matching
-    def pick(name_variants):
-        for v in name_variants:
-            if v in df_rate.columns:
-                return v
-        # contains match
-        for c in df_rate.columns:
-            for v in name_variants:
-                if v.lower() in c.lower():
-                    return c
-        raise KeyError(f"Не найдена колонка: {name_variants}")
+    uploaded = st.file_uploader("Загрузка файла (Excel)", type=["xlsx"])
+    col1, col2 = st.columns(2)
+    with col1:
+        date_from = st.date_input("Дата от (дата начала расчета)")
+    with col2:
+        date_to = st.date_input("Дата до (дата до которой производится расчет)")
 
-    c_from = pick(["С", "C", "с"])
-    c_to = pick(["По", "по"])
-    c_days_year = pick(["дней в году", "дней_в_году"])
-    c_rate = pick(["ставка, %", "ставка,%", "ставка", "ставка %"])
+    calc = st.button("Рассчитать", type="primary", disabled=(uploaded is None))
 
-    periods: List[RatePeriod] = []
+    if not calc:
+        return
+    if uploaded is None:
+        st.error("Загрузите Excel файл.")
+        return
+    if date_from > date_to:
+        st.error("Дата от не может быть больше даты до.")
+        return
+
+    try:
+        result_zip_bytes = run_calculation(uploaded.getvalue(), date_from, date_to)
+        st.success("Готово. Скачайте результат.")
+        st.download_button(
+            "Скачать ZIP (Excel + PDF по договорам)",
+            data=result_zip_bytes,
+            file_name="percent395_outputs.zip",
+            mime="application/zip",
+        )
+    except Exception as e:
+        st.exception(e)
+
+
+# =========================
+# Helpers
+# =========================
+
+def _to_date(x) -> Optional[dt.date]:
+    if x is None or (isinstance(x, float) and math.isnan(x)):
+        return None
+    if isinstance(x, dt.datetime):
+        return x.date()
+    if isinstance(x, dt.date):
+        return x
+    return pd.to_datetime(x, dayfirst=True).date()
+
+
+def _sheet_to_df(wb: openpyxl.Workbook, sheet_name: str) -> pd.DataFrame:
+    ws = wb[sheet_name]
+    data = list(ws.values)
+    header_idx = None
+    for i, row in enumerate(data):
+        if any(v is not None and str(v).strip() != "" for v in row):
+            header_idx = i
+            break
+    if header_idx is None:
+        return pd.DataFrame()
+
+    header = [str(v).strip() if v is not None else "" for v in data[header_idx]]
+    rows = data[header_idx + 1 :]
+    df = pd.DataFrame(rows, columns=header).dropna(axis=1, how="all").dropna(how="all")
+    return df
+
+
+def _normalize_rate(val) -> float:
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return 0.0
+    v = float(val)
+    return v / 100.0 if v > 1 else v
+
+
+def _find_sheet_name(wb: openpyxl.Workbook, candidates: List[str]) -> Optional[str]:
+    lower_map = {name.lower(): name for name in wb.sheetnames}
+    for c in candidates:
+        if c.lower() in lower_map:
+            return lower_map[c.lower()]
+    return None
+
+
+def _parse_rates(df_rate: pd.DataFrame) -> List[RateRow]:
+    # expected cols like: "С", "По", "дней в году", "ставка, %"
+    col_s = next(c for c in df_rate.columns if c.strip().lower() == "с")
+    col_po = next(c for c in df_rate.columns if c.strip().lower() == "по")
+    col_rate = next(c for c in df_rate.columns if "ставк" in c.lower())
+    col_diy = next(c for c in df_rate.columns if "дней в году" in c.lower() or "год" in c.lower())
+
+    out: List[RateRow] = []
     for _, r in df_rate.iterrows():
-        if pd.isna(r[c_from]) or pd.isna(r[c_to]) or pd.isna(r[c_days_year]) or pd.isna(r[c_rate]):
+        s = _to_date(r[col_s])
+        e = _to_date(r[col_po])
+        if not s or not e:
             continue
-        periods.append(
-            RatePeriod(
-                start=_to_date(r[c_from]),
-                end=_to_date(r[c_to]),
-                days_in_year=int(r[c_days_year]),
-                rate=float(r[c_rate]),
+        out.append(
+            RateRow(
+                start=s,
+                end=e,
+                days_in_year=int(r[col_diy]),
+                rate=_normalize_rate(r[col_rate]),
             )
         )
-    periods.sort(key=lambda p: p.start)
-    return periods
+    out.sort(key=lambda x: x.start)
+    return out
 
 
-def _calc_395_for_sum(
+def _rate_for_date(rates: List[RateRow], d: dt.date) -> RateRow:
+    for rr in rates:
+        if rr.start <= d <= rr.end:
+            return rr
+    raise ValueError(f"Нет ставки для даты {d}")
+
+
+def _fmt_date(d: dt.date) -> str:
+    return d.strftime("%d.%m.%Y")
+
+
+def _fmt_money(x: float) -> str:
+    return f"{x:,.2f}".replace(",", " ").replace(".", ",")
+
+
+def _compute_contract(
+    date_from: dt.date,
+    date_to: dt.date,
     principal: float,
-    date_from: date,
-    date_to: date,
-    periods: List[RatePeriod],
-) -> Tuple[float, List[Dict[str, Any]]]:
-    """
-    Return: (total_interest, rows_for_pdf)
-    """
-    rows: List[Dict[str, Any]] = []
+    rates: List[RateRow],
+    payments: List[Tuple[dt.date, float]],
+) -> Tuple[float, List[dict]]:
+    # payment reduces principal from next day (payment_date + 1)
+    payments = sorted([(d, a) for d, a in payments if d is not None], key=lambda x: x[0])
+
+    pay_map: Dict[dt.date, float] = {}
+    for d, a in payments:
+        if date_from <= d <= date_to:
+            pay_map[d] = pay_map.get(d, 0.0) + float(a)
+
+    rate_starts = [r.start for r in rates if date_from < r.start <= date_to]
+    pay_effective = [(d + dt.timedelta(days=1)) for d in pay_map.keys() if d < date_to]
+
+    breakpoints = sorted(set([date_from, date_to + dt.timedelta(days=1)] + rate_starts + pay_effective))
+
+    rows: List[dict] = []
+    cur_principal = float(principal)
     total = 0.0
 
-    for p in periods:
-        seg_start = max(date_from, p.start)
-        seg_end = min(date_to, p.end)
+    for i in range(len(breakpoints) - 1):
+        seg_start = breakpoints[i]
+        seg_end = breakpoints[i + 1] - dt.timedelta(days=1)
+        if seg_start > date_to or seg_end < date_from:
+            continue
+        seg_start = max(seg_start, date_from)
+        seg_end = min(seg_end, date_to)
         if seg_start > seg_end:
             continue
 
-        days = _days_inclusive(seg_start, seg_end)
-        interest = principal * days / p.days_in_year * p.rate
+        rr = _rate_for_date(rates, seg_start)
+        days = (seg_end - seg_start).days + 1  # inclusive
+        interest = cur_principal * days * rr.rate / rr.days_in_year
         total += interest
 
         rows.append(
             {
-                "start": seg_start,
-                "end": seg_end,
+                "kind": "interest",
+                "from": seg_start,
+                "to": seg_end,
                 "days": days,
-                "rate": p.rate,
-                "days_in_year": p.days_in_year,
-                "principal": principal,
+                "rate": rr.rate,
+                "diy": rr.days_in_year,
+                "principal": cur_principal,
+                "formula": f"{cur_principal:.2f}*{days}*1/{rr.days_in_year}*{rr.rate*100:.2f}%",
                 "interest": interest,
             }
         )
 
-    return round(total + 1e-9, 2), rows
+        # add payment rows inside this segment (payment applies next day, but row is shown on payment date)
+        for pdate in sorted([d for d in pay_map.keys() if seg_start <= d <= seg_end]):
+            amount = pay_map[pdate]
+            cur_principal = max(0.0, cur_principal - amount)
+            rows.append(
+                {
+                    "kind": "payment",
+                    "payment_date": pdate,
+                    "payment_amount": amount,
+                    "principal_after": cur_principal,
+                }
+            )
+
+    return total, rows
 
 
-def _build_pdf_bytes(
+def _build_pdf(
     contract_no: str,
-    contract_date: date | None,
-    fio: str | None,
-    as_of: date,
-    calc_rows: List[Dict[str, Any]],
-    total_interest: float,
+    contract_date: Optional[dt.date],
+    fio: str,
+    date_to: dt.date,
+    principal: float,
+    rows: List[dict],
+    total: float,
 ) -> bytes:
-    font, font_bold = _register_cyrillic_font()
     styles = getSampleStyleSheet()
-    base = ParagraphStyle(
-        "base",
-        parent=styles["Normal"],
-        fontName=font,
-        fontSize=10,
-        leading=12,
-    )
-    title = ParagraphStyle(
-        "title",
-        parent=base,
-        fontName=font_bold,
-        fontSize=11,
-        leading=14,
-        alignment=1,
-        spaceAfter=6,
-    )
-
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buf,
-        pagesize=landscape(A4),
-        leftMargin=15*mm,
-        rightMargin=15*mm,
-        topMargin=15*mm,
-        bottomMargin=15*mm,
-        title=f"395_{contract_no}",
+
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm, topMargin=15 * mm, bottomMargin=15 * mm)
+    story = []
+
+    cd = _fmt_date(contract_date) if contract_date else ""
+    title = f"Расчет процентов по ст. 395 ГК РФ по договору №{contract_no} от {cd} {fio} на {_fmt_date(date_to)} г."
+    story.append(Paragraph(title, styles["Title"]))
+    story.append(Spacer(1, 6 * mm))
+
+    header = ["№", "Период c", "Период по", "Дней", "Ставка, %", "Сумма платежа", "Дата платежа", "Основной долг", "Формула", "Проценты, ₽"]
+    data = [header]
+
+    n = 0
+    for it in rows:
+        if it["kind"] == "interest":
+            n += 1
+            data.append(
+                [
+                    str(n),
+                    _fmt_date(it["from"]),
+                    _fmt_date(it["to"]),
+                    str(it["days"]),
+                    f"{it['rate']*100:.2f}".replace(".", ","),
+                    "-",
+                    "-",
+                    _fmt_money(it["principal"]),
+                    it["formula"].replace(".", ","),
+                    _fmt_money(it["interest"]),
+                ]
+            )
+        else:
+            data.append(
+                [
+                    "",
+                    _fmt_date(it["payment_date"]),
+                    "",
+                    "",
+                    "",
+                    _fmt_money(it["payment_amount"]),
+                    _fmt_date(it["payment_date"]),
+                    _fmt_money(it["principal_after"]),
+                    "",
+                    "",
+                ]
+            )
+
+    data.append(["", "", "", "", "", "", "", "", "Итого:", _fmt_money(total)])
+
+    tbl = Table(data, repeatRows=1, colWidths=[8*mm, 20*mm, 20*mm, 10*mm, 12*mm, 18*mm, 18*mm, 20*mm, 48*mm, 18*mm])
+    tbl.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 8),
+                ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                ("ALIGN", (0, 1), (4, -1), "CENTER"),
+                ("ALIGN", (5, 1), (7, -1), "RIGHT"),
+                ("ALIGN", (9, 1), (9, -1), "RIGHT"),
+                ("FONT", (8, -1), (9, -1), "Helvetica-Bold", 8),
+                ("BACKGROUND", (8, -1), (9, -1), colors.whitesmoke),
+            ]
+        )
     )
+    story.append(tbl)
+    doc.build(story)
 
-    cd = f"{contract_date:%d.%m.%Y}" if isinstance(contract_date, date) else ""
-    fio_txt = fio or ""
-
-    header_text = (
-        "Расчет процентов за неправомерное пользование чужими денежными средствами "
-        "по периодам действия ключевой ставки ЦБ РФ по номеру договора "
-        f"№{contract_no}"
-        + (f" от {cd}" if cd else "")
-        + (f" {fio_txt}" if fio_txt else "")
-        + f" на {as_of:%d.%m.%Y} г."
-    )
-
-    elements = [
-        Paragraph(header_text, title),
-        Spacer(1, 4*mm),
-    ]
-
-    # Table header
-    data = [[
-        "№",
-        "Период\nпросрочки c",
-        "Период\nпросрочки по",
-        "Коли\nчеств\nо\nдней",
-        "Ставка в\n%",
-        "Сумма\nплатежа",
-        "Дата\nплатежа",
-        "Основной\nдолг",
-        "Формула",
-        "Сумма\nпроцентов",
-    ]]
-
-    for i, r in enumerate(calc_rows, 1):
-        principal = float(r["principal"])
-        days = int(r["days"])
-        rate = float(r["rate"])
-        diy = int(r["days_in_year"])
-        interest = float(r["interest"])
-
-        formula = f"{principal:.2f}*{days}*1/{diy}*{_fmt_percent_ru(rate)}"
-        data.append([
-            str(i),
-            r["start"].strftime("%d.%m.%Y"),
-            r["end"].strftime("%d.%m.%Y"),
-            str(days),
-            _fmt_percent_ru(rate),
-            "-",   # Сумма платежа
-            "-",   # Дата платежа
-            _fmt_money_ru(principal),
-            formula,
-            _fmt_money_ru(round(interest + 1e-9, 2)),
-        ])
-
-    data.append(["", "", "", "", "", "", "", "", "Итого:", _fmt_money_ru(total_interest)])
-
-    # Table width: stretch to full available width (same as header block)
-    _w = [10, 22, 22, 14, 18, 22, 20, 22, 48, 22]  # relative weights (mm-based)
-    _sumw = sum(_w)
-    col_widths = [doc.width * (w / _sumw) for w in _w]
-
-    tbl = Table(
-        data,
-        colWidths=col_widths,
-        repeatRows=1,
-    )
-
-    tbl.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (-1, 0), font_bold),
-        ("FONTNAME", (0, 0), (-1, -1), font),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("GRID", (0, 0), (-1, -2), 0.5, colors.black),
-        ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
-        ("ALIGN", (0, 1), (0, -2), "CENTER"),
-        ("ALIGN", (3, 1), (4, -2), "CENTER"),
-        ("ALIGN", (5, 1), (6, -2), "CENTER"),
-        ("ALIGN", (7, 1), (7, -2), "RIGHT"),
-        ("ALIGN", (9, 1), (9, -2), "RIGHT"),
-        ("SPAN", (0, -1), (8, -1)),
-        ("ALIGN", (8, -1), (8, -1), "RIGHT"),
-        ("ALIGN", (9, -1), (9, -1), "RIGHT"),
-        ("LINEABOVE", (0, -1), (-1, -1), 1.0, colors.black),
-    ]))
-
-    elements.append(tbl)
-    doc.build(elements)
     return buf.getvalue()
 
 
-# ----------------------------
-# Streamlit UI
-# ----------------------------
+def run_calculation(excel_bytes: bytes, date_from: dt.date, date_to: dt.date) -> bytes:
+    wb = openpyxl.load_workbook(io.BytesIO(excel_bytes), data_only=True)
 
-def run():
-    st.title("Расчет % по 395 статье")
+    sheet_list = _find_sheet_name(wb, ["Список"])
+    sheet_pay = _find_sheet_name(wb, ["Платежа", "Платежи"])
+    sheet_rate = _find_sheet_name(wb, ["Ставка"])
 
-    st.write("Загрузите Excel с листами «Ставка» и «Список».")
+    if not sheet_list or not sheet_rate:
+        raise ValueError("Нужны листы: 'Список' и 'Ставка'.")
 
-    uploaded = st.file_uploader("Файл Excel", type=["xlsx", "xls"])
-    c1, c2 = st.columns(2)
-    with c1:
-        date_from = st.date_input(
-            "Дата от (дата начала расчета)",
-            value=st.session_state.get("p395_date_from", date.today()),
-            key="p395_date_from_ui",
+    df_list = _sheet_to_df(wb, sheet_list)
+    df_rate = _sheet_to_df(wb, sheet_rate)
+
+    if df_list.empty:
+        raise ValueError("Лист 'Список' пустой.")
+    if df_rate.empty:
+        raise ValueError("Лист 'Ставка' пустой.")
+
+    # payments optional
+    df_pay = pd.DataFrame()
+    if sheet_pay:
+        df_pay = _sheet_to_df(wb, sheet_pay)
+
+    # required columns in list
+    if "Номер договора" not in df_list.columns or "Сумма ОД" not in df_list.columns:
+        raise ValueError("В листе 'Список' нужны колонки: 'Номер договора' и 'Сумма ОД'.")
+
+    # optional attributes for PDF header
+    if "Дата договора" in df_list.columns:
+        df_list["Дата договора"] = df_list["Дата договора"].apply(_to_date)
+    else:
+        df_list["Дата договора"] = None
+    if "ФИО" not in df_list.columns:
+        df_list["ФИО"] = ""
+
+    rates = _parse_rates(df_rate)
+
+    # build payments dict
+    payments_by: Dict[str, List[Tuple[dt.date, float]]] = {}
+    if not df_pay.empty and {"Номер договора", "Дата платежа", "Сума платежа"}.issubset(set(df_pay.columns)):
+        df_pay["Дата платежа"] = df_pay["Дата платежа"].apply(_to_date)
+        for _, r in df_pay.iterrows():
+            cn = str(int(r["Номер договора"])) if pd.notna(r["Номер договора"]) else None
+            if not cn:
+                continue
+            payments_by.setdefault(cn, []).append((r["Дата платежа"], float(r["Сума платежа"])))
+    # else: ignore payments entirely
+
+    # compute
+    totals: Dict[str, float] = {}
+    pdfs: Dict[str, bytes] = {}
+
+    for _, r in df_list.iterrows():
+        cn = str(int(r["Номер договора"]))
+        principal = float(r["Сумма ОД"])
+        fio = str(r.get("ФИО", "") or "")
+        cdate = r.get("Дата договора", None)
+
+        total, rows = _compute_contract(date_from, date_to, principal, rates, payments_by.get(cn, []))
+        totals[cn] = round(total, 2)
+
+        pdfs[cn] = _build_pdf(
+            contract_no=cn,
+            contract_date=cdate,
+            fio=fio,
+            date_to=date_to,
+            principal=principal,
+            rows=rows,
+            total=total,
         )
-    with c2:
-        date_to = st.date_input(
-            "Дата до (дата до которой производится расчет)",
-            value=st.session_state.get("p395_date_to", date.today()),
-            key="p395_date_to_ui",
-        )
 
-    # сохраняем выбранные даты
-    st.session_state["p395_date_from"] = date_from
-    st.session_state["p395_date_to"] = date_to
+    # write updated excel using openpyxl (preserve original sheets)
+    wb_out = openpyxl.load_workbook(io.BytesIO(excel_bytes))
+    ws = wb_out[sheet_list]
 
-    calc_btn = st.button("Рассчитать")
+    # locate header row
+    header_row = None
+    headers = None
+    for i, row in enumerate(ws.iter_rows(values_only=True), start=1):
+        if any(v is not None and str(v).strip() != "" for v in row):
+            header_row = i
+            headers = [str(v).strip() if v is not None else "" for v in row]
+            break
+    if header_row is None or headers is None:
+        raise ValueError("Не удалось найти заголовок в листе 'Список'.")
 
-    def _render_outputs():
-        if st.session_state.get("p395_done") and st.session_state.get("p395_excel_bytes") and st.session_state.get("p395_zip_bytes"):
-            st.success(f"Готово. Договоров: {st.session_state.get('p395_contracts', 0)}")
+    contract_col = headers.index("Номер договора") + 1
+    if "Сума по 395" in headers:
+        percent_col = headers.index("Сума по 395") + 1
+    else:
+        percent_col = len(headers) + 1
+        ws.cell(row=header_row, column=percent_col, value="Сума по 395")
 
-            st.download_button(
-                "Скачать Excel с «Сума по 395»",
-                data=st.session_state["p395_excel_bytes"],
-                file_name="395_result.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+    for row_idx in range(header_row + 1, ws.max_row + 1):
+        v = ws.cell(row=row_idx, column=contract_col).value
+        if v is None:
+            continue
+        cn = str(int(v))
+        ws.cell(row=row_idx, column=percent_col, value=totals.get(cn, 0.0))
 
-            st.download_button(
-                "Скачать PDF-расчеты (ZIP)",
-                data=st.session_state["p395_zip_bytes"],
-                file_name="395_pdfs.zip",
-                mime="application/zip",
-            )
+    out_xlsx_buf = io.BytesIO()
+    wb_out.save(out_xlsx_buf)
+    out_xlsx_bytes = out_xlsx_buf.getvalue()
 
-            st.caption("PDF формируется по примеру: один файл на договор, имя = номер договора.")
+    # pack zip
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        z.writestr("percent395_result.xlsx", out_xlsx_bytes)
+        for cn, pdf_bytes in pdfs.items():
+            z.writestr(f"{cn}.pdf", pdf_bytes)
 
-    # Если расчет уже делали — показываем кнопки скачивания всегда,
-    # даже после клика по download_button (Streamlit делает rerun).
-    if not calc_btn:
-        if st.session_state.get("p395_done"):
-            _render_outputs()
-        else:
-            st.info('Загрузите файл, выберите даты и нажмите «Рассчитать».')
-        return
-
-    if uploaded is None:
-        st.error("Загрузите Excel-файл.")
-        return
-
-    if date_from > date_to:
-        st.error("Дата от не может быть больше Даты до.")
-        return
-    try:
-        xls = pd.ExcelFile(uploaded)
-        if "Ставка" not in xls.sheet_names or "Список" not in xls.sheet_names:
-            st.error("В файле должны быть листы «Ставка» и «Список».")
-            return
-
-        df_rate = pd.read_excel(xls, sheet_name="Ставка")
-        df_list = pd.read_excel(xls, sheet_name="Список")
-        periods = _load_rate_periods(df_rate)
-
-        # Подставляем разумные даты по умолчанию из таблицы ставок,
-        # чтобы расчет не давал 0 из-за отсутствия пересечений.
-        try:
-            min_rate_date = min(p.start for p in periods)
-            max_rate_date = max(p.end for p in periods)
-            if "p395_date_from" not in st.session_state:
-                st.session_state["p395_date_from"] = min_rate_date
-            if "p395_date_to" not in st.session_state:
-                st.session_state["p395_date_to"] = max_rate_date
-        except Exception:
-            pass
+    return zip_buf.getvalue()
 
 
-        # Normalize list columns
-        list_col_map = {c: c.strip().replace("\xa0", " ") for c in df_list.columns}
-        df_list = df_list.rename(columns=list_col_map)
-
-        required = ["Номер договора", "Сумма ОД"]
-        missing = [c for c in required if c not in df_list.columns]
-        if missing:
-            st.error(f"На листе «Список» нет колонок: {', '.join(missing)}")
-            return
-
-        if "ФИО" not in df_list.columns:
-            df_list["ФИО"] = ""
-        if "Дата договора" not in df_list.columns:
-            df_list["Дата договора"] = pd.NaT
-
-
-        # Проверяем покрытие диапазона таблицей ставок и при необходимости
-        # считаем только в пределах доступных ставок (с предупреждением).
-        min_rate_date = min(p.start for p in periods) if periods else None
-        max_rate_date = max(p.end for p in periods) if periods else None
-
-        date_from_eff = date_from
-        date_to_eff = date_to
-
-        if min_rate_date and date_from_eff < min_rate_date:
-            date_from_eff = min_rate_date
-        if max_rate_date and date_to_eff > max_rate_date:
-            date_to_eff = max_rate_date
-
-        if (date_from_eff != date_from) or (date_to_eff != date_to):
-            st.warning(
-                f"Диапазон дат частично вне таблицы «Ставка». "
-                f"Расчет выполнен за период {date_from_eff.strftime('%d.%m.%Y')}–{date_to_eff.strftime('%d.%m.%Y')}."
-            )
-
-        if date_from_eff > date_to_eff:
-            st.error("Выбранный период не пересекается с таблицей «Ставка».")
-            return
-
-        out_rows = []
-        pdf_files: List[Tuple[str, bytes]] = []
-
-        for _, row in df_list.iterrows():
-            contract_no = str(row.get("Номер договора", "")).strip()
-            fio = str(row.get("ФИО", "")).strip() if not pd.isna(row.get("ФИО", "")) else ""
-            cdate = row.get("Дата договора", pd.NaT)
-            contract_date = None if pd.isna(cdate) else _to_date(cdate)
-
-            principal = float(row.get("Сумма ОД", 0) or 0)
-            total_interest, calc_rows = _calc_395_for_sum(principal, date_from_eff, date_to_eff, periods)
-
-            out_row = dict(row)
-            out_row["Сума по 395"] = total_interest
-            out_rows.append(out_row)
-
-            pdf_bytes = _build_pdf_bytes(
-                contract_no=contract_no,
-                contract_date=contract_date,
-                fio=fio,
-                as_of=date_to_eff,
-                calc_rows=calc_rows,
-                total_interest=total_interest,
-            )
-            pdf_files.append((f"{_safe_filename(contract_no)}.pdf", pdf_bytes))
-
-        df_out = pd.DataFrame(out_rows)
-
-        # -------- Excel + PDF outputs (persist in session_state so buttons не исчезают)
-        excel_buf = io.BytesIO()
-        with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
-            df_rate.to_excel(writer, sheet_name="Ставка", index=False)
-            df_out.to_excel(writer, sheet_name="Список", index=False)
-        excel_bytes = excel_buf.getvalue()
-
-        zip_buf = io.BytesIO()
-        with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for fname, b in pdf_files:
-                zf.writestr(fname, b)
-        zip_bytes = zip_buf.getvalue()
-
-        st.session_state["p395_excel_bytes"] = excel_bytes
-        st.session_state["p395_zip_bytes"] = zip_bytes
-        st.session_state["p395_contracts"] = len(df_out)
-        st.session_state["p395_done"] = True
-
-        _render_outputs()
-
-    except Exception as e:
-        st.exception(e)
+if __name__ == "__main__":
+    percent395_app()
