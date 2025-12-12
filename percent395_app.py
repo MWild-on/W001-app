@@ -174,11 +174,19 @@ def _parse_rates(df_rate: pd.DataFrame) -> List[RateRow]:
     return out
 
 
-def _rate_for_date(rates, d):
-    for r in rates:
-        if r.start <= d <= r.end:
-            return r
-    raise ValueError("Нет ставки")
+def _rate_for_date(rates: List[RateRow], d: dt.date) -> RateRow:
+    # 1) точное попадание в период
+    for rr in rates:
+        if rr.start <= d <= rr.end:
+            return rr
+
+    # 2) если нет ставки на дату — берём последнюю ставку, которая началась раньше даты
+    left = [rr for rr in rates if rr.start <= d]
+    if left:
+        return max(left, key=lambda x: x.start)
+
+    # 3) совсем нет ставок до даты
+    raise ValueError(f"Нет ставки для даты {d}. Проверьте лист 'Ставка' и период расчёта.")
 
 
 def _fmt(d):
