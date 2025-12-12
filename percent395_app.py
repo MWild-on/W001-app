@@ -293,7 +293,8 @@ def run():
         st.error("Дата от не может быть больше Даты до.")
         return
 
-
+    calc_btn = st.button("Рассчитать")
+    
     if not calc_btn:
         st.info('Нажмите «Рассчитать» для выполнения расчета.')
         return
