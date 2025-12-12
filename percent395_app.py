@@ -113,8 +113,14 @@ def percent395_app():
                 key="download_excel_395",
             )
     
-    except Exception as e:
-        st.exception(e)
+        except ValueError as e:
+            # пользовательская ошибка — показываем красиво
+            st.error(str(e))
+        
+        except Exception as e:
+            # техническая ошибка — оставляем traceback
+            st.exception(e)
+
 
 
 
