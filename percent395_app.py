@@ -273,7 +273,7 @@ def _build_pdf(
     font_name = _ensure_cyrillic_font()
 
     styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name="RU_Title", parent=styles["Title"], fontName=font_name))
+    styles.add(ParagraphStyle(name="RU_Title", parent=styles["Title"], fontName=font_name, fontSize=14))
     styles.add(ParagraphStyle(name="RU_Normal", parent=styles["Normal"], fontName=font_name))
 
     buf = io.BytesIO()
@@ -295,8 +295,8 @@ def _build_pdf(
 
     header = [
         "№", "Период c", "Период по", "Дней", "Ставка, %",
-        "Сумма платежа", "Дата платежа", "Основной долг",
-        "Формула", "Проценты, ₽",
+        "Сумма<br/>платежа", "Дата<br/>платежа", "Основной<br/>долг",
+        "Формула", "Проценты",
     ]
     data = [header]
 
