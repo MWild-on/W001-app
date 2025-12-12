@@ -37,6 +37,21 @@ class RateRow:
 def run():
     percent395_app()
 
+def _register_cyrillic_font():
+    """
+    Как в вашем примере: best effort.
+    Возвращает (regular_font, bold_font).
+    """
+    try:
+        pdfmetrics.registerFont(TTFont("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
+        pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
+        return "DejaVuSans", "DejaVuSans-Bold"
+    except Exception:
+        return "Helvetica", "Helvetica-Bold"
+
+
+
+
 
 def percent395_app():
     st.title("Начисление процентов по ст. 395 ГК РФ")
@@ -280,20 +295,26 @@ def _build_pdf(
     rows: List[dict],
     total: float,
 ) -> bytes:
-    font_name = _ensure_cyrillic_font()
-
+    font, font_bold = _register_cyrillic_font()
     styles = getSampleStyleSheet()
-    
-    styles.add(ParagraphStyle(
-        name="RU_Title",
-        fontName=font_name,
-        fontSize=12,
+
+    base = ParagraphStyle(
+        "base",
+        parent=styles["Normal"],
+        fontName=font,
+        fontSize=10,
+        leading=12,
+    )
+
+    title_style = ParagraphStyle(
+        "title",
+        parent=base,
+        fontName=font_bold,
+        fontSize=11,
         leading=14,
         alignment=1,      # CENTER
-        spaceAfter=10,
-    ))
-    
-    styles.add(ParagraphStyle(name="RU_Normal", parent=styles["Normal"], fontName=font_name, fontSize=10))
+        spaceAfter=6,
+    )
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -303,91 +324,124 @@ def _build_pdf(
         rightMargin=15 * mm,
         topMargin=15 * mm,
         bottomMargin=15 * mm,
+        title=f"395_{contract_no}",
     )
 
-    story = []
-
     cd = _fmt_date(contract_date) if contract_date else ""
-    title = f"Расчет процентов по ст. 395 ГК РФ по договору №{contract_no} от {cd} {fio} на {_fmt_date(date_to)} г."
-    story.append(Paragraph(title, styles["RU_Title"]))
-    story.append(Spacer(1, 6 * mm))
+    fio_txt = fio or ""
 
-    header = [
-        "№", 
-        "Период c", 
-        "Период по", 
-        "Дней", 
-        Paragraph ("Ставка,<br/> %", styles["RU_Normal"]),
-        Paragraph ("Сумма<br/>платежа", styles["RU_Normal"]),
-        Paragraph ("Дата<br/>платежа", styles["RU_Normal"]),
-        Paragraph ("Основной<br/>долг",styles["RU_Normal"]),
-        "Формула", 
-        "Проценты",
+    header_text = (
+        "Расчет процентов за неправомерное пользование чужими денежными средствами "
+        "по периодам действия ключевой ставки ЦБ РФ по номеру договора "
+        f"№{contract_no}"
+        + (f" от {cd}" if cd else "")
+        + (f" {fio_txt}" if fio_txt else "")
+        + f" на {_fmt_date(date_to)} г."
+    )
+
+    elements = [
+        Paragraph(header_text, title_style),
+        Spacer(1, 4 * mm),
     ]
-    data = [header]
+
+    # Шапка таблицы — как в примере (переносы через \n)
+    data = [[
+        "№",
+        "Период\nпросрочки c",
+        "Период\nпросрочки по",
+        "Коли\nчеств\nо\nдней",
+        "Ставка в\n%",
+        "Сумма\nплатежа",
+        "Дата\nплатежа",
+        "Основной\nдолг",
+        "Формула",
+        "Сумма\nпроцентов",
+    ]]
 
     n = 0
     for it in rows:
         if it["kind"] == "interest":
             n += 1
-            data.append(
-                [
-                    str(n),
-                    _fmt_date(it["from"]),
-                    _fmt_date(it["to"]),
-                    str(it["days"]),
-                    f"{it['rate']*100:.2f}".replace(".", ","),
-                    "-",
-                    "-",
-                    _fmt_money(it["principal"]),
-                    it["formula"].replace(".", ","),
-                    _fmt_money(it["interest"]),
-                ]
-            )
+            pr = float(it["principal"])
+            days = int(it["days"])
+            rate = float(it["rate"])
+            diy = int(it["diy"])
+            interest = float(it["interest"])
+
+            formula = f"{pr:.2f}*{days}*1/{diy}*{rate*100:.2f}%"
+            formula = formula.replace(".", ",")
+
+            data.append([
+                str(n),
+                _fmt_date(it["from"]),
+                _fmt_date(it["to"]),
+                str(days),
+                f"{rate*100:.2f}%".replace(".", ","),
+                "-",
+                "-",
+                _fmt_money(pr),
+                formula,
+                _fmt_money(round(interest + 1e-9, 2)),
+            ])
+
         else:
-            data.append(
-                [
-                    "",
-                    _fmt_date(it["payment_date"]),
-                    "",
-                    "",
-                    "",
-                    _fmt_money(it["payment_amount"]),
-                    _fmt_date(it["payment_date"]),
-                    _fmt_money(it["principal_after"]),
-                    "",
-                    "",
-                ]
-            )
+            # строка платежа (как отдельная строка, без номера)
+            pdate = it["payment_date"]
+            pay = float(it["payment_amount"])
+            pr_after = float(it["principal_after"])
+
+            data.append([
+                "",
+                _fmt_date(pdate),
+                "",
+                "",
+                "",
+                _fmt_money(pay),
+                _fmt_date(pdate),
+                _fmt_money(pr_after),
+                "",
+                "",
+            ])
 
     data.append(["", "", "", "", "", "", "", "", "Итого:", _fmt_money(total)])
 
+    # Ширины колонок — долями от doc.width (как в примере)
+    _w = [6, 14, 14, 9, 12, 14, 13, 14, 32, 14]
+    _sumw = sum(_w)
+    col_widths = [doc.width * (w / _sumw) for w in _w]
+
     tbl = Table(
         data,
+        colWidths=col_widths,
         repeatRows=1,
-        colWidths=[8*mm, 20*mm, 20*mm, 10*mm, 12*mm, 18*mm, 18*mm, 22*mm, 46*mm, 18*mm],
-    )
-    tbl.setStyle(
-        TableStyle(
-            [
-                ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                ("FONTSIZE", (0, 0), (-1, -1), 7),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("ALIGN", (0, 0), (-1, 0), "CENTER"),
-                ("ALIGN", (0, 1), (4, -1), "CENTER"),
-                ("ALIGN", (5, 1), (7, -1), "RIGHT"),
-                ("ALIGN", (9, 1), (9, -1), "RIGHT"),
-                ("BACKGROUND", (8, -1), (9, -1), colors.whitesmoke),
-
-                ("FONTNAME", (0, 0), (-1, -1), font_name),
-            ]
-        )
     )
 
-    story.append(tbl)
-    doc.build(story)
+    tbl.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, 0), font_bold),
+        ("FONTNAME", (0, 0), (-1, -1), font),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+
+        ("GRID", (0, 0), (-1, -2), 0.5, colors.black),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+
+        ("ALIGN", (0, 1), (0, -2), "CENTER"),
+        ("ALIGN", (3, 1), (4, -2), "CENTER"),
+        ("ALIGN", (5, 1), (6, -2), "CENTER"),
+        ("ALIGN", (7, 1), (7, -2), "RIGHT"),
+        ("ALIGN", (9, 1), (9, -2), "RIGHT"),
+
+        ("SPAN", (0, -1), (8, -1)),
+        ("ALIGN", (8, -1), (8, -1), "RIGHT"),
+        ("ALIGN", (9, -1), (9, -1), "RIGHT"),
+        ("LINEABOVE", (0, -1), (-1, -1), 1.0, colors.black),
+    ]))
+
+    elements.append(tbl)
+    doc.build(elements)
     return buf.getvalue()
+
 
 
 def run_calculation(excel_bytes: bytes, date_from: dt.date, date_to: dt.date) -> Tuple[bytes, bytes]:
