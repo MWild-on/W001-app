@@ -274,7 +274,7 @@ def _build_pdf(
 
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle(name="RU_Title", parent=styles["Title"], fontName=font_name, fontSize=14))
-    styles.add(ParagraphStyle(name="RU_Normal", parent=styles["Normal"], fontName=font_name))
+    styles.add(ParagraphStyle(name="RU_Normal", parent=styles["Normal"], fontName=font_name, fontSize=10))
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -298,7 +298,7 @@ def _build_pdf(
         "Период c", 
         "Период по", 
         "Дней", 
-        "Ставка, %",
+        Paragraph ("Ставка,<br/> %", styles["RU_Normal"]),
         Paragraph ("Сумма<br/>платежа", styles["RU_Normal"]),
         Paragraph ("Дата<br/>платежа", styles["RU_Normal"]),
         Paragraph ("Основной<br/>долг",styles["RU_Normal"]),
