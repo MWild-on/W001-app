@@ -1,3 +1,5 @@
+# percent395_app.py
+
 import io
 import os
 import zipfile
@@ -15,40 +17,14 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
-
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.styles import ParagraphStyle
 
-def _ensure_cyrillic_font():
-    # DejaVuSans обычно есть в Linux/Streamlit Cloud
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames():
-                pdfmetrics.registerFont(TTFont("DejaVuSans", p))
-            return "DejaVuSans"
-    # если не нашли – пусть упадёт понятной ошибкой
-    raise FileNotFoundError("Не найден шрифт DejaVuSans.ttf для кириллицы")
 
-
-  
 # =========================
 # Core: percent395_app
 # =========================
-
-# ======================
-# Core structures
-# ======================
-
-from dataclasses import dataclass
-import datetime as dt
-import streamlit as st
-
 
 @dataclass
 class RateRow:
@@ -58,17 +34,9 @@ class RateRow:
     rate: float  # decimal: 0.16 == 16%
 
 
-# ======================
-# Entry point for app.py
-# ======================
-
 def run():
     percent395_app()
 
-
-# ======================
-# UI + logic
-# ======================
 
 def percent395_app():
     st.title("Начисление процентов по ст. 395 ГК РФ")
@@ -96,9 +64,9 @@ def percent395_app():
 
     try:
         zip_bytes, xlsx_bytes = run_calculation(uploaded.getvalue(), date_from, date_to)
-        
+
         st.success("Готово. Скачайте результат.")
-        
+
         c1, c2 = st.columns(2)
         with c1:
             st.download_button(
@@ -116,7 +84,6 @@ def percent395_app():
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
-
 
     except Exception as e:
         st.exception(e)
@@ -139,6 +106,7 @@ def _to_date(x) -> Optional[dt.date]:
 def _sheet_to_df(wb: openpyxl.Workbook, sheet_name: str) -> pd.DataFrame:
     ws = wb[sheet_name]
     data = list(ws.values)
+
     header_idx = None
     for i, row in enumerate(data):
         if any(v is not None and str(v).strip() != "" for v in row):
@@ -148,7 +116,7 @@ def _sheet_to_df(wb: openpyxl.Workbook, sheet_name: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     header = [str(v).strip() if v is not None else "" for v in data[header_idx]]
-    rows = data[header_idx + 1 :]
+    rows = data[header_idx + 1:]
     df = pd.DataFrame(rows, columns=header).dropna(axis=1, how="all").dropna(how="all")
     return df
 
@@ -169,11 +137,13 @@ def _find_sheet_name(wb: openpyxl.Workbook, candidates: List[str]) -> Optional[s
 
 
 def _parse_rates(df_rate: pd.DataFrame) -> List[RateRow]:
-    # expected cols like: "С", "По", "дней в году", "ставка, %"
     col_s = next(c for c in df_rate.columns if c.strip().lower() == "с")
     col_po = next(c for c in df_rate.columns if c.strip().lower() == "по")
     col_rate = next(c for c in df_rate.columns if "ставк" in c.lower())
-    col_diy = next(c for c in df_rate.columns if "дней в году" in c.lower() or "год" in c.lower())
+    col_diy = next(
+        c for c in df_rate.columns
+        if "дней в году" in c.lower() or ("дней" in c.lower() and "год" in c.lower())
+    )
 
     out: List[RateRow] = []
     for _, r in df_rate.iterrows():
@@ -208,6 +178,21 @@ def _fmt_money(x: float) -> str:
     return f"{x:,.2f}".replace(",", " ").replace(".", ",")
 
 
+def _ensure_cyrillic_font() -> str:
+    # DejaVuSans обычно есть в Linux (Streamlit Cloud / Docker)
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont("DejaVuSans", p))
+            return "DejaVuSans"
+    raise FileNotFoundError("Не найден шрифт (DejaVuSans.ttf) для кириллицы. Добавьте TTF в проект и зарегистрируйте его.")
+
+
 def _compute_contract(
     date_from: dt.date,
     date_to: dt.date,
@@ -215,7 +200,7 @@ def _compute_contract(
     rates: List[RateRow],
     payments: List[Tuple[dt.date, float]],
 ) -> Tuple[float, List[dict]]:
-    # payment reduces principal from next day (payment_date + 1)
+    # платеж уменьшает ОД со следующего дня (payment_date + 1)
     payments = sorted([(d, a) for d, a in payments if d is not None], key=lambda x: x[0])
 
     pay_map: Dict[dt.date, float] = {}
@@ -235,8 +220,7 @@ def _compute_contract(
     for i in range(len(breakpoints) - 1):
         seg_start = breakpoints[i]
         seg_end = breakpoints[i + 1] - dt.timedelta(days=1)
-        if seg_start > date_to or seg_end < date_from:
-            continue
+
         seg_start = max(seg_start, date_from)
         seg_end = min(seg_end, date_to)
         if seg_start > seg_end:
@@ -261,7 +245,7 @@ def _compute_contract(
             }
         )
 
-        # add payment rows inside this segment (payment applies next day, but row is shown on payment date)
+        # строки платежей (в пределах периода), ОД уменьшаем на дату платежа
         for pdate in sorted([d for d in pay_map.keys() if seg_start <= d <= seg_end]):
             amount = pay_map[pdate]
             cur_principal = max(0.0, cur_principal - amount)
@@ -278,11 +262,6 @@ def _compute_contract(
 
 
 def _build_pdf(
-    font_name = _ensure_cyrillic_font()
-    styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name="RU_Title", parent=styles["Title"], fontName=font_name))
-    styles.add(ParagraphStyle(name="RU_Normal", parent=styles["Normal"], fontName=font_name))
-
     contract_no: str,
     contract_date: Optional[dt.date],
     fio: str,
@@ -291,10 +270,22 @@ def _build_pdf(
     rows: List[dict],
     total: float,
 ) -> bytes:
-    styles = getSampleStyleSheet()
-    buf = io.BytesIO()
+    font_name = _ensure_cyrillic_font()
 
-    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm, topMargin=15 * mm, bottomMargin=15 * mm)
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="RU_Title", parent=styles["Title"], fontName=font_name))
+    styles.add(ParagraphStyle(name="RU_Normal", parent=styles["Normal"], fontName=font_name))
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=15 * mm,
+        rightMargin=15 * mm,
+        topMargin=15 * mm,
+        bottomMargin=15 * mm,
+    )
+
     story = []
 
     cd = _fmt_date(contract_date) if contract_date else ""
@@ -302,7 +293,11 @@ def _build_pdf(
     story.append(Paragraph(title, styles["RU_Title"]))
     story.append(Spacer(1, 6 * mm))
 
-    header = ["№", "Период c", "Период по", "Дней", "Ставка, %", "Сумма платежа", "Дата платежа", "Основной долг", "Формула", "Проценты, ₽"]
+    header = [
+        "№", "Период c", "Период по", "Дней", "Ставка, %",
+        "Сумма платежа", "Дата платежа", "Основной долг",
+        "Формула", "Проценты, ₽",
+    ]
     data = [header]
 
     n = 0
@@ -341,31 +336,35 @@ def _build_pdf(
 
     data.append(["", "", "", "", "", "", "", "", "Итого:", _fmt_money(total)])
 
-    tbl = Table(data, repeatRows=1, colWidths=[8*mm, 20*mm, 20*mm, 10*mm, 12*mm, 18*mm, 18*mm, 20*mm, 48*mm, 18*mm])
+    tbl = Table(
+        data,
+        repeatRows=1,
+        colWidths=[8*mm, 20*mm, 20*mm, 10*mm, 12*mm, 18*mm, 18*mm, 22*mm, 46*mm, 18*mm],
+    )
     tbl.setStyle(
         TableStyle(
             [
                 ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                ("FONT", (0, 0), (-1, 0), "DejaVu", 8),
                 ("FONTSIZE", (0, 0), (-1, -1), 7),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("ALIGN", (0, 0), (-1, 0), "CENTER"),
                 ("ALIGN", (0, 1), (4, -1), "CENTER"),
                 ("ALIGN", (5, 1), (7, -1), "RIGHT"),
                 ("ALIGN", (9, 1), (9, -1), "RIGHT"),
-                ("FONT", (8, -1), (9, -1), "DejaVu", 8),
                 ("BACKGROUND", (8, -1), (9, -1), colors.whitesmoke),
+
+                ("FONTNAME", (0, 0), (-1, -1), font_name),
             ]
         )
     )
+
     story.append(tbl)
     doc.build(story)
-
     return buf.getvalue()
 
 
-def run_calculation(excel_bytes: bytes, date_from: dt.date, date_to: dt.date) -> bytes:
+def run_calculation(excel_bytes: bytes, date_from: dt.date, date_to: dt.date) -> Tuple[bytes, bytes]:
     wb = openpyxl.load_workbook(io.BytesIO(excel_bytes), data_only=True)
 
     sheet_list = _find_sheet_name(wb, ["Список"])
@@ -392,28 +391,31 @@ def run_calculation(excel_bytes: bytes, date_from: dt.date, date_to: dt.date) ->
     if "Номер договора" not in df_list.columns or "Сумма ОД" not in df_list.columns:
         raise ValueError("В листе 'Список' нужны колонки: 'Номер договора' и 'Сумма ОД'.")
 
-    # optional attributes for PDF header
+    # optional attrs for PDF
     if "Дата договора" in df_list.columns:
         df_list["Дата договора"] = df_list["Дата договора"].apply(_to_date)
     else:
         df_list["Дата договора"] = None
+
     if "ФИО" not in df_list.columns:
         df_list["ФИО"] = ""
 
     rates = _parse_rates(df_rate)
 
-    # build payments dict
+    # build payments dict (optional)
     payments_by: Dict[str, List[Tuple[dt.date, float]]] = {}
-    if not df_pay.empty and {"Номер договора", "Дата платежа", "Сума платежа"}.issubset(set(df_pay.columns)):
+    if (
+        not df_pay.empty
+        and {"Номер договора", "Дата платежа", "Сума платежа"}.issubset(set(df_pay.columns))
+    ):
         df_pay["Дата платежа"] = df_pay["Дата платежа"].apply(_to_date)
         for _, r in df_pay.iterrows():
-            cn = str(int(r["Номер договора"])) if pd.notna(r["Номер договора"]) else None
-            if not cn:
+            if pd.isna(r["Номер договора"]):
                 continue
+            cn = str(int(r["Номер договора"]))
             payments_by.setdefault(cn, []).append((r["Дата платежа"], float(r["Сума платежа"])))
-    # else: ignore payments entirely
+    # else: ignore payments
 
-    # compute
     totals: Dict[str, float] = {}
     pdfs: Dict[str, bytes] = {}
 
@@ -436,11 +438,10 @@ def run_calculation(excel_bytes: bytes, date_from: dt.date, date_to: dt.date) ->
             total=total,
         )
 
-    # write updated excel using openpyxl (preserve original sheets)
+    # write updated excel (preserve sheets)
     wb_out = openpyxl.load_workbook(io.BytesIO(excel_bytes))
     ws = wb_out[sheet_list]
 
-    # locate header row
     header_row = None
     headers = None
     for i, row in enumerate(ws.iter_rows(values_only=True), start=1):
@@ -452,6 +453,8 @@ def run_calculation(excel_bytes: bytes, date_from: dt.date, date_to: dt.date) ->
         raise ValueError("Не удалось найти заголовок в листе 'Список'.")
 
     contract_col = headers.index("Номер договора") + 1
+
+    # создаём/находим колонку "Сума по 395"
     if "Сума по 395" in headers:
         percent_col = headers.index("Сума по 395") + 1
     else:
@@ -477,7 +480,7 @@ def run_calculation(excel_bytes: bytes, date_from: dt.date, date_to: dt.date) ->
             z.writestr(f"{cn}.pdf", pdf_bytes)
 
     zip_bytes = zip_buf.getvalue()
-  return zip_bytes, out_xlsx_bytes
+    return zip_bytes, out_xlsx_bytes
 
 
 
