@@ -4,6 +4,8 @@ import streamlit as st
 import converter_app
 import indexation_app
 import statement_app
+import percent395_app
+
 
 from ui_common import apply_global_css  # общий стиль для всех страниц
 
