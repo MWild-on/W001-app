@@ -64,63 +64,50 @@ def percent395_app():
     with col2:
         date_to = st.date_input("Дата до (дата до которой производится расчет)")
 
-    # кнопка расчёта
     calc = st.button("Рассчитать", type="primary", disabled=(uploaded is None))
 
-    # --- сигнатура входа, чтобы понимать: те же ли параметры ---
-    sig = None
-    if uploaded is not None:
-        # uploaded.name + даты достаточно. Если нужно жёстче — можно добавить size/хеш.
-        sig = (uploaded.name, str(date_from), str(date_to))
+    if not calc:
+        return
 
-    # если параметры изменились — сбрасываем старый результат
-    if sig is not None and st.session_state.get("p395_sig") != sig:
-        st.session_state["p395_sig"] = sig
-        st.session_state.pop("p395_zip", None)
-        st.session_state.pop("p395_xlsx", None)
+    if uploaded is None:
+        st.error("Загрузите Excel файл.")
+        return
 
-    # валидация дат (без return до отображения кнопок скачивания)
-    if uploaded is not None and date_from > date_to:
+    if date_from > date_to:
         st.error("Дата от не может быть больше даты до.")
         return
 
-    # --- если нажали рассчитать, делаем расчёт и кладём в session_state ---
-    if calc:
-        if uploaded is None:
-            st.error("Загрузите Excel файл.")
+    try:
+        # 1) Считаем только один раз, сохраняем в session_state
+        if "p395_zip" not in st.session_state or "p395_xlsx" not in st.session_state:
+            zip_bytes, xlsx_bytes = run_calculation(uploaded.getvalue(), date_from, date_to)
+            st.session_state["p395_zip"] = zip_bytes
+            st.session_state["p395_xlsx"] = xlsx_bytes
         else:
-            try:
-                zip_bytes, xlsx_bytes = run_calculation(uploaded.getvalue(), date_from, date_to)
-                st.session_state["p395_zip"] = zip_bytes
-                st.session_state["p395_xlsx"] = xlsx_bytes
-                st.success("Готово. Скачайте результат.")
-
-
-    # --- показываем кнопки скачивания ВСЕГДА, если результат уже есть ---
-    if "p395_zip" in st.session_state and "p395_xlsx" in st.session_state:
-        st.info("Результаты готовы. Можно скачать файлы.")
+            zip_bytes = st.session_state["p395_zip"]
+            xlsx_bytes = st.session_state["p395_xlsx"]
+    
+        st.success("Готово. Скачайте результат.")
+    
         c1, c2 = st.columns(2)
-
         with c1:
             st.download_button(
                 "Скачать ZIP (только PDF)",
-                data=st.session_state["p395_zip"],
+                data=zip_bytes,
                 file_name="percent395_pdfs.zip",
                 mime="application/zip",
                 use_container_width=True,
                 key="download_zip_pdfs",
             )
-
         with c2:
             st.download_button(
                 "Скачать Excel",
-                data=st.session_state["p395_xlsx"],
+                data=xlsx_bytes,
                 file_name="percent395_result.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
                 key="download_excel_395",
             )
-
     
     except Exception as e:
         st.exception(e)
@@ -585,3 +572,8 @@ def run_calculation(excel_bytes: bytes, date_from: dt.date, date_to: dt.date) ->
 
     zip_bytes = zip_buf.getvalue()
     return zip_bytes, out_xlsx_bytes
+
+
+
+if __name__ == "__main__":
+    percent395_app()
