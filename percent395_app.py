@@ -65,9 +65,13 @@ def percent395_app():
         date_to = st.date_input("Дата до (дата до которой производится расчет)")
 
     calc = st.button("Рассчитать", type="primary", disabled=(uploaded is None))
-
-    if not calc:
+    
+    # НЕ выходим, если уже есть готовый результат (после клика Download происходит rerun)
+    has_result = ("p395_zip" in st.session_state and "p395_xlsx" in st.session_state)
+    
+    if (not calc) and (not has_result):
         return
+
 
     if uploaded is None:
         st.error("Загрузите Excel файл.")
