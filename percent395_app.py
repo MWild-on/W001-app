@@ -148,17 +148,29 @@ def _find_sheet_name(wb, names):
     return None
 
 
-def _parse_rates(df):
-    out = []
-    for _, r in df.iterrows():
-        out.append(
-            RateRow(
-                start=_to_date(r["С"]),
-                end=_to_date(r["По"]),
-                days_in_year=int(r["дней в году"]),
-                rate=float(r["Ставка"]) / 100,
-            )
-        )
+def _parse_rates(df_rate: pd.DataFrame) -> List[RateRow]:
+    col_s = next(c for c in df_rate.columns if str(c).strip().lower() == "с")
+    col_po = next(c for c in df_rate.columns if str(c).strip().lower() == "по")
+    col_rate = next(c for c in df_rate.columns if "ставк" in str(c).lower())
+    col_diy = next(
+        c for c in df_rate.columns
+        if ("дней" in str(c).lower() and "год" in str(c).lower()) or "дней в году" in str(c).lower()
+    )
+
+    out: List[RateRow] = []
+    for _, r in df_rate.iterrows():
+        s = _to_date(r[col_s])
+        e = _to_date(r[col_po])
+        if not s or not e:
+            continue
+
+        diy = int(float(r[col_diy]))
+        rate_val = float(r[col_rate])
+        rate = rate_val / 100.0 if rate_val > 1 else rate_val
+
+        out.append(RateRow(start=s, end=e, days_in_year=diy, rate=rate))
+
+    out.sort(key=lambda x: x.start)
     return out
 
 
