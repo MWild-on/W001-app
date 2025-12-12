@@ -21,6 +21,15 @@ from reportlab.lib.units import mm
 # Core: percent395_app
 # =========================
 
+# ======================
+# Core structures
+# ======================
+
+from dataclasses import dataclass
+import datetime as dt
+import streamlit as st
+
+
 @dataclass
 class RateRow:
     start: dt.date
@@ -29,11 +38,23 @@ class RateRow:
     rate: float  # decimal: 0.16 == 16%
 
 
+# ======================
+# Entry point for app.py
+# ======================
+
+def run():
+    percent395_app()
+
+
+# ======================
+# UI + logic
+# ======================
+
 def percent395_app():
-    st.set_page_config(page_title="395 ГК РФ", layout="wide")
     st.title("Начисление процентов по ст. 395 ГК РФ")
 
     uploaded = st.file_uploader("Загрузка файла (Excel)", type=["xlsx"])
+
     col1, col2 = st.columns(2)
     with col1:
         date_from = st.date_input("Дата от (дата начала расчета)")
@@ -44,15 +65,22 @@ def percent395_app():
 
     if not calc:
         return
+
     if uploaded is None:
         st.error("Загрузите Excel файл.")
         return
+
     if date_from > date_to:
         st.error("Дата от не может быть больше даты до.")
         return
 
     try:
-        result_zip_bytes = run_calculation(uploaded.getvalue(), date_from, date_to)
+        result_zip_bytes = run_calculation(
+            uploaded.getvalue(),
+            date_from,
+            date_to
+        )
+
         st.success("Готово. Скачайте результат.")
         st.download_button(
             "Скачать ZIP (Excel + PDF по договорам)",
@@ -60,6 +88,7 @@ def percent395_app():
             file_name="percent395_outputs.zip",
             mime="application/zip",
         )
+
     except Exception as e:
         st.exception(e)
 
