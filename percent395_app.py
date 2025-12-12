@@ -94,8 +94,7 @@ def percent395_app():
                 st.session_state["p395_zip"] = zip_bytes
                 st.session_state["p395_xlsx"] = xlsx_bytes
                 st.success("Готово. Скачайте результат.")
-            except Exception as e:
-                st.exception(e)
+
 
     # --- показываем кнопки скачивания ВСЕГДА, если результат уже есть ---
     if "p395_zip" in st.session_state and "p395_xlsx" in st.session_state:
