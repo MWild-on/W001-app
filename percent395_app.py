@@ -317,9 +317,11 @@ def _build_pdf(
     )
 
     buf = io.BytesIO()
+    from reportlab.lib.pagesizes import A4, landscape
+    
     doc = SimpleDocTemplate(
         buf,
-        pagesize=A4,
+        pagesize=landscape(A4),
         leftMargin=15 * mm,
         rightMargin=15 * mm,
         topMargin=15 * mm,
