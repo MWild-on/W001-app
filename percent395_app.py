@@ -273,8 +273,10 @@ def _compute_contract(
 
         rr = _rate_for_date(rates, seg_start)
         days = (seg_end - seg_start).days + 1  # inclusive
-        interest = cur_principal * days * rr.rate / rr.days_in_year
+        interest_raw = cur_principal * days * rr.rate / rr.days_in_year
+        interest = round(interest_raw, 2)
         total += interest
+
 
         rows.append(
             {
