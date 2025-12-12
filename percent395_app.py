@@ -1,5 +1,5 @@
 
-# percent395_app.py — Расчет процентов по ст. 395 ГК РФ
+# percent395_app.py — Расчет процентов по ст. 395 ГК РФ  
 
 from __future__ import annotations
 
