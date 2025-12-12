@@ -365,7 +365,7 @@ def _build_pdf(
         "№",
         "Период\nпросрочки c",
         "Период\nпросрочки по",
-        "Коли\nчеств\nо\nдней",
+        "Коли\nчество\nдней",
         "Ставка в\n%",
         "Сумма\nплатежа",
         "Дата\nплатежа",
@@ -497,6 +497,23 @@ def run_calculation(excel_bytes: bytes, date_from: dt.date, date_to: dt.date) ->
         df_list["ФИО"] = ""
 
     rates = _parse_rates(df_rate)
+    
+    # --- проверка покрытия ставок ---
+    last_rate_date = max(r.end for r in rates)
+    first_rate_date = min(r.start for r in rates)
+    
+    if date_to > last_rate_date:
+        raise ValueError(
+            f"Дата до ({date_to.strftime('%d.%m.%Y')}) больше последней даты в таблице 'Ставка' "
+            f"({last_rate_date.strftime('%d.%m.%Y')}). Добавьте ставки или уменьшите период расчёта."
+        )
+    
+    if date_from < first_rate_date:
+        raise ValueError(
+            f"Дата от ({date_from.strftime('%d.%m.%Y')}) меньше первой даты в таблице 'Ставка' "
+            f"({first_rate_date.strftime('%d.%m.%Y')}). Добавьте ставки или измените период расчёта."
+        )
+
 
     # build payments dict (optional)
     payments_by: Dict[str, List[Tuple[dt.date, float]]] = {}
