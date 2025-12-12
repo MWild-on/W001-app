@@ -179,18 +179,23 @@ def _fmt_money(x: float) -> str:
 
 
 def _ensure_cyrillic_font() -> str:
-    # DejaVuSans обычно есть в Linux (Streamlit Cloud / Docker)
     candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
     ]
+
     for p in candidates:
         if os.path.exists(p):
-            if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames():
-                pdfmetrics.registerFont(TTFont("DejaVuSans", p))
-            return "DejaVuSans"
-    raise FileNotFoundError("Не найден шрифт (DejaVuSans.ttf) для кириллицы. Добавьте TTF в проект и зарегистрируйте его.")
+            if "LiberationSerif" not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(
+                    TTFont("LiberationSerif", p)
+                )
+            return "LiberationSerif"
+
+    raise FileNotFoundError(
+        "Не найден шрифт LiberationSerif. Установите пакет fonts-liberation"
+    )
+
 
 
 def _compute_contract(
