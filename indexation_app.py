@@ -356,6 +356,16 @@ def generate_pdf_bytes_for_debt(
         alignment=TA_CENTER,
     )
 
+    style_subtitle = ParagraphStyle(
+        "Subtitle",
+        parent=styles["Normal"],
+        fontName=FONT_NAME,
+        fontSize=11,
+        leading=14,
+        spaceAfter=12,
+        alignment=TA_CENTER,
+    )
+   
     style_h2 = ParagraphStyle(
         "Heading2",
         parent=styles["Normal"],
@@ -390,6 +400,19 @@ def generate_pdf_bytes_for_debt(
     # Заголовок
     # -----------------------------
     story.append(Paragraph("Расчёт индексации присуждённых сумм", style_title))
+
+    # Если в исходном Excel есть колонка «Номер приказа» и она заполнена,
+    # добавляем строку "по делу № ..."
+    order_number = ""
+    if "Номер приказа" in main_row.index:
+        raw_num = main_row.get("Номер приказа")
+        if pd.notna(raw_num):
+            order_number = str(raw_num).strip()
+
+    if order_number and order_number.lower() not in ("nan", "none"):
+        story.append(Paragraph(f"по делу № {order_number}", style_subtitle))
+
+    
     story.append(Spacer(1, 12))
 
     order_date = pd.to_datetime(main_row["Дата вынесения приказа"]).date()
