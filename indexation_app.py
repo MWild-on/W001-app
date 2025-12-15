@@ -352,7 +352,7 @@ def generate_pdf_bytes_for_debt(
         fontName=FONT_NAME_BOLD,
         fontSize=14,
         leading=18,
-        spaceAfter=12,
+        spaceAfter=2,
         alignment=TA_CENTER,
     )
 
