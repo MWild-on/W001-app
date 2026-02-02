@@ -11,6 +11,8 @@ from typing import Dict, List, Tuple, Optional
 import pandas as pd
 import openpyxl
 import streamlit as st
+import hashlib
+import re
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -49,34 +51,39 @@ def _register_cyrillic_font():
     except Exception:
         return "Helvetica", "Helvetica-Bold"
 
+def _calc_key(file_bytes: bytes, date_from: dt.date, date_to: dt.date) -> str:
+    h = hashlib.sha256()
+    h.update(file_bytes)
+    h.update(str(date_from).encode("utf-8"))
+    h.update(str(date_to).encode("utf-8"))
+    return h.hexdigest()
 
-import re
 
 def _norm_contract_no(v) -> Optional[str]:
     if v is None or (isinstance(v, float) and math.isnan(v)):
         return None
 
-    
+    # Якщо вже строка — НЕ чіпаємо початкові нулі
     if isinstance(v, str):
         s = v.strip()
         if s == "":
             return None
-      
+        # чисто цифри -> повертаємо як є (з нулями)
         if re.fullmatch(r"\d+", s):
             return s
-       
+        # на випадок "12345.0" текстом
         if re.fullmatch(r"\d+\.0", s):
             return s[:-2]
         return s
 
-   
+    # Якщо Excel віддав число
     if isinstance(v, int):
         return str(v)
 
     if isinstance(v, float):
         if v.is_integer():
             return str(int(v))
-       
+        # якщо раптом неціле — як є
         return str(v)
 
     return str(v).strip() or None
@@ -97,7 +104,12 @@ def percent395_app():
     calc = st.button("Рассчитать", type="primary", disabled=(uploaded is None))
     
     # НЕ выходим, если уже есть готовый результат (после клика Download происходит rerun)
-    has_result = ("p395_zip" in st.session_state and "p395_xlsx" in st.session_state)
+    has_result = (
+    "p395_zip" in st.session_state
+    and "p395_xlsx" in st.session_state
+    and "p395_key" in st.session_state
+)
+
     
     if (not calc) and (not has_result):
         return
@@ -113,13 +125,18 @@ def percent395_app():
 
     try:
         # 1) Считаем только один раз, сохраняем в session_state
-        if "p395_zip" not in st.session_state or "p395_xlsx" not in st.session_state:
-            zip_bytes, xlsx_bytes = run_calculation(uploaded.getvalue(), date_from, date_to)
+        file_bytes = uploaded.getvalue()
+        key = _calc_key(file_bytes, date_from, date_to)
+        
+        if st.session_state.get("p395_key") != key:
+            zip_bytes, xlsx_bytes = run_calculation(file_bytes, date_from, date_to)
             st.session_state["p395_zip"] = zip_bytes
             st.session_state["p395_xlsx"] = xlsx_bytes
+            st.session_state["p395_key"] = key
         else:
             zip_bytes = st.session_state["p395_zip"]
             xlsx_bytes = st.session_state["p395_xlsx"]
+
     
         st.success("Готово. Скачайте результат.")
     
@@ -578,7 +595,6 @@ def run_calculation(excel_bytes: bytes, date_from: dt.date, date_to: dt.date) ->
         cn = _norm_contract_no(r["Номер договора"])
         if not cn:
             continue
-
         principal = float(r["Сумма ОД"])
         fio = str(r.get("ФИО", "") or "")
         cdate = r.get("Дата договора", None)
@@ -627,6 +643,7 @@ def run_calculation(excel_bytes: bytes, date_from: dt.date, date_to: dt.date) ->
         if not cn:
             continue
         ws.cell(row=row_idx, column=percent_col, value=totals.get(cn, 0.0))
+
 
     out_xlsx_buf = io.BytesIO()
     wb_out.save(out_xlsx_buf)
