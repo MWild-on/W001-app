@@ -245,14 +245,15 @@ def process_bank_statement(df: pd.DataFrame) -> pd.DataFrame:
     # В части выписок колонки «Счет» нет — тогда для УФК/ФССП используем «Дебет»
     bailiff_series = df["Счет"] if "Счет" in df.columns else df["Дебет"]
 
-    # Порядок колонок как в исходном результате: PaymentProvider, затем IsFromBailiff, CourtOrderNumber, ...
+    # Порядок колонок: PaymentProvider, затем IsFromBailiff. Для PaymentProvider нужен уже вычисленный IsFromBailiff ("Y"/"N")
+    is_from_bailiff_series = bailiff_series.apply(extract_is_from_bailiff)
     res["PaymentProvider"] = df.apply(
         lambda row: determine_payment_provider(
-            bailiff_series[row.name], row["Назначение платежа"]
+            is_from_bailiff_series[row.name], row["Назначение платежа"]
         ),
         axis=1,
     )
-    res["IsFromBailiff"] = bailiff_series.apply(extract_is_from_bailiff)
+    res["IsFromBailiff"] = is_from_bailiff_series
 
     res["CourtOrderNumber"] = df["Назначение платежа"].apply(
         extract_court_order_number
