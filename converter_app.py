@@ -31,6 +31,23 @@ def extract_is_from_bailiff(text: str) -> str:
     return "Y" if any(kw in txt for kw in keywords) else "N"
 
 
+def determine_payment_provider(is_from_bailiff: str, payment_purpose: str) -> str:
+    """
+    Определить провайдера платежа:
+    - если платёж от УФК (IsFromBailiff == "Y") -> "FSSP";
+    - если назначение начинается с "{} 54ПБ Взыскание по ИД" -> "SB IP";
+    - иначе -> "OTHER".
+    """
+    if str(is_from_bailiff).upper() == "Y":
+        return "FSSP"
+
+    purpose = str(payment_purpose).lstrip()
+    if purpose.lower().startswith("{} 54пб взыскание по ид"):
+        return "SB IP"
+
+    return "OTHER"
+
+
 def extract_court_order_number(text: str) -> str:
     """Извлечь номер судебного приказа / ИД (текущая версия с приоритетами и исключениями)."""
     text_l = str(text).lower()
@@ -44,6 +61,16 @@ def extract_court_order_number(text: str) -> str:
     match_id_direct = re.search(r"\bид\s+([\d\-]+/\d{4}(?:-\d{1,3})?)\b", text_l)
     if match_id_direct:
         return match_id_direct.group(1)
+
+    # Приоритет: «Судебный приказ 2-515/2025» — не отбрасывать из‑за ИП в предыдущем тексте
+    sp_match = re.search(
+        r"(?:судебный приказ|суд\.? приказ|с/пр)\s*(?:№|:)?\s*([\d\-]+/\d{4}(?:-\d{1,3})?)",
+        text_l,
+    )
+    if sp_match:
+        value = sp_match.group(1)
+        if len(value.strip()) >= 5 and not re.search(r"-ип$", value):
+            return value
 
     patterns = [
         r"№[а-яa-z]+[\d\-]*-([\d\-]+/\d{4}(?:-\d{1,3})?)",
@@ -135,10 +162,10 @@ def extract_fio(text: str) -> str:
     """Попытка вытащить ФИО из текста назначения."""
     txt = str(text)
     patterns = [
+        r"(?:взыскано\s+)?с\s+должника\s+([А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+)",
         r"\bс\s+([А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+)",
         r"\bдолг[а]?:\s*([А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+)",
         r"\bдолжника:\s*([А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+)",
-        r"с должника\s+([А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+)",
         r"долга взыскателю\s*:\s*([А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+)",
         r"\bс:\s*([А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+)",
     ]
@@ -146,6 +173,53 @@ def extract_fio(text: str) -> str:
         m = re.search(pattern, txt, flags=re.IGNORECASE)
         if m:
             return m.group(1).title().strip()
+
+    # Доп. проверка: три подряд идущих слова, третье оканчивается на -ович/-евич/-овна/-евна
+    fallback = re.search(
+        r"\b([А-ЯЁа-яё]+)\s+([А-ЯЁа-яё]+)\s+([А-ЯЁа-яё]+(?:ович|евич|овна|евна))\b",
+        txt,
+    )
+    if fallback:
+        return f"{fallback.group(1)} {fallback.group(2)} {fallback.group(3)}".title().strip()
+    return ""
+
+
+def _patronymic_ok(word: str) -> bool:
+    """Проверка окончания отчества: -ович/-евич/-овна/-евна."""
+    w = (word or "").lower()
+    return (
+        w.endswith("ович")
+        or w.endswith("евич")
+        or w.endswith("овна")
+        or w.endswith("евна")
+    )
+
+
+def extract_fio_from_debet_54pb(text: str) -> str:
+    """
+    ФИО для формата 54ПБ. В ячейке данные могут быть разделены переносами строки (как в Excel).
+    Сначала ищем строку, содержащую «//» — берём из неё текст до «//» (перед «//» может быть пробел);
+    если там ровно 3 слова и третье с окончанием -ович/-евич/-овна/-евна — это ФИО.
+    Запасной вариант: весь текст до первого «//», слова 3–5 с проверкой окончания 5-го.
+    """
+    raw = str(text).replace("\r\n", "\n").replace("\r", "\n")
+
+    # Приоритет: строка с «//» (когда в ячейке разделение по переносам строки)
+    for line in raw.splitlines():
+        line = line.strip()
+        if "//" not in line:
+            continue
+        part = re.split(r"\s*//", line, maxsplit=1)[0].strip()
+        parts_words = part.split()
+        if len(parts_words) == 3 and _patronymic_ok(parts_words[2]):
+            return " ".join(parts_words).title()
+
+    # Запасной вариант: весь текст до «//», слова 3–5
+    before_slash = re.split(r"\s*//", raw, maxsplit=1)[0].strip()
+    words = before_slash.split()
+    if len(words) >= 5 and _patronymic_ok(words[4]):
+        return f"{words[2]} {words[3]} {words[4]}".title()
+
     return ""
 
 
@@ -167,9 +241,18 @@ def process_bank_statement(df: pd.DataFrame) -> pd.DataFrame:
     res["BankAccount"] = df["Кредит"].apply(extract_bank_account)
     res["InvoiceNum"] = ""
     res["InvoiceID"] = ""
-    res["PaymentProvider"] = ""
 
-    res["IsFromBailiff"] = df["Счет"].apply(extract_is_from_bailiff)
+    # В части выписок колонки «Счет» нет — тогда для УФК/ФССП используем «Дебет»
+    bailiff_series = df["Счет"] if "Счет" in df.columns else df["Дебет"]
+
+    # Порядок колонок как в исходном результате: PaymentProvider, затем IsFromBailiff, CourtOrderNumber, ...
+    res["PaymentProvider"] = df.apply(
+        lambda row: determine_payment_provider(
+            bailiff_series[row.name], row["Назначение платежа"]
+        ),
+        axis=1,
+    )
+    res["IsFromBailiff"] = bailiff_series.apply(extract_is_from_bailiff)
 
     res["CourtOrderNumber"] = df["Назначение платежа"].apply(
         extract_court_order_number
@@ -183,7 +266,19 @@ def process_bank_statement(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     res["Номер ИП"] = df["Назначение платежа"].apply(extract_ip_number)
-    res["ФИО"] = df["Назначение платежа"].apply(extract_fio)
+
+    def _get_fio(row):
+        purpose = str(row["Назначение платежа"]).lstrip()
+        if purpose.lower().startswith("{} 54пб взыскание по ид"):
+            debet_val = row["Дебет"]
+            if pd.isna(debet_val) or str(debet_val).strip().lower() in ("", "nan"):
+                if "Счет" in df.columns and pd.notna(row.get("Счет")) and str(row["Счет"]).strip().lower() not in ("", "nan"):
+                    return extract_fio_from_debet_54pb(row["Счет"])
+                return extract_fio(row["Назначение платежа"])
+            return extract_fio_from_debet_54pb(debet_val)
+        return extract_fio(row["Назначение платежа"])
+
+    res["ФИО"] = df.apply(_get_fio, axis=1)
     res["Назначение платежа"] = df["Назначение платежа"]
 
     return res
@@ -211,14 +306,28 @@ def run():
         # Читаем выписку — как и раньше, пропуская первые 2 строки
         df_raw = pd.read_excel(uploaded_file, skiprows=2)
 
-        # Переименовываем нужные столбцы по фиксированным индексам
-        df_raw.columns.values[1] = "Дата проводки"
-        df_raw.columns.values[4] = "Счет"
-        df_raw.columns.values[6] = "Дебет"
-        df_raw.columns.values[8] = "Кредит"
-        df_raw.columns.values[13] = "Сумма по кредиту"
-        df_raw.columns.values[14] = "№ документа"
-        df_raw.columns.values[20] = "Назначение платежа"
+        # Переименовываем нужные столбцы: если в файле есть колонка с нужным именем — используем её
+        def _col_by_name_or_index(df, name, fallback_idx):
+            for i, c in enumerate(df.columns):
+                if str(c).strip().lower() == name.lower():
+                    if str(c).strip() != name:
+                        df.rename(columns={df.columns[i]: name}, inplace=True)
+                    return
+            # Не перезаписывать колонку, если там уже «Дебет» или «Счет» (в части файлов Дебет на индексе 4)
+            existing = str(df.columns[fallback_idx]).strip() if fallback_idx < len(df.columns) else ""
+            if name == "Счет" and existing == "Дебет":
+                return
+            if name == "Дебет" and existing == "Счет":
+                return
+            df.columns.values[fallback_idx] = name
+
+        _col_by_name_or_index(df_raw, "Дата проводки", 1)
+        _col_by_name_or_index(df_raw, "Счет", 4)
+        _col_by_name_or_index(df_raw, "Дебет", 6)  # в файле колонка может быть под именем "Дебет"
+        _col_by_name_or_index(df_raw, "Кредит", 8)
+        _col_by_name_or_index(df_raw, "Сумма по кредиту", 13)
+        _col_by_name_or_index(df_raw, "№ документа", 14)
+        _col_by_name_or_index(df_raw, "Назначение платежа", 20)
 
         df = df_raw.copy()
 
