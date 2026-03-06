@@ -9,6 +9,9 @@ import streamlit as st
 
 from ui_common import section_header, apply_global_css
 
+# Дата/время релиза конвертера (обновлять при выкладке)
+CONVERTER_RELEASE = "06.03.2025 10:00"
+
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
 
@@ -295,7 +298,8 @@ def run():
 
     section_header(
         "Конвертер банковской выписки",
-        "Загрузите файл выписки. Я выделю только нужные операции и соберу таблицу..."
+        "Загрузите файл выписки. Я выделю только нужные операции и соберу таблицу...",
+        release=f"Релиз: {CONVERTER_RELEASE}",
     )
 
     uploaded_file = st.file_uploader(
