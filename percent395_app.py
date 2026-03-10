@@ -41,9 +41,8 @@ def run():
 
 def _register_cyrillic_font():
     """
-    Регистрирует шрифт с кириллицей.
-    Если шрифт не найден — падаем с понятной ошибкой,
-    а не молча уходим в Helvetica.
+    Подключает шрифт с кириллицей.
+    Если шрифт не найден, показываем понятную ошибку.
     """
     regular_candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -64,9 +63,9 @@ def _register_cyrillic_font():
 
     if not regular_path or not bold_path:
         raise FileNotFoundError(
-            "Не найден TTF-шрифт с кириллицей. "
-            "Нужны DejaVuSans.ttf и DejaVuSans-Bold.ttf "
-            "в системе или в папке ./fonts/"
+            "Не найден шрифт с кириллицей для PDF. "
+            "Добавьте DejaVuSans.ttf и DejaVuSans-Bold.ttf в папку fonts "
+            "или установите их в системе."
         )
 
     if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames():
@@ -118,6 +117,12 @@ def _norm_contract_no(v) -> Optional[str]:
 
 def percent395_app():
     st.title("Начисление процентов по ст. 395 ГК РФ")
+
+    try:
+        version_dt = dt.datetime.fromtimestamp(os.path.getmtime(__file__))
+        st.caption(f"Текущая версия создана: {version_dt.strftime('%d.%m.%Y %H:%M:%S')}")
+    except Exception:
+        st.caption("Текущая версия создана: дата недоступна")
 
     uploaded = st.file_uploader("Загрузка файла (Excel)", type=["xlsx"])
 
