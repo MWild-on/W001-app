@@ -41,15 +41,41 @@ def run():
 
 def _register_cyrillic_font():
     """
-    Как в вашем примере: best effort.
-    Возвращает (regular_font, bold_font).
+    Регистрирует шрифт с кириллицей.
+    Если шрифт не найден — падаем с понятной ошибкой,
+    а не молча уходим в Helvetica.
     """
-    try:
-        pdfmetrics.registerFont(TTFont("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
-        pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
-        return "DejaVuSans", "DejaVuSans-Bold"
-    except Exception:
-        return "Helvetica", "Helvetica-Bold"
+    regular_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "./fonts/DejaVuSans.ttf",
+        "fonts/DejaVuSans.ttf",
+    ]
+
+    bold_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+        "./fonts/DejaVuSans-Bold.ttf",
+        "fonts/DejaVuSans-Bold.ttf",
+    ]
+
+    regular_path = next((p for p in regular_candidates if os.path.exists(p)), None)
+    bold_path = next((p for p in bold_candidates if os.path.exists(p)), None)
+
+    if not regular_path or not bold_path:
+        raise FileNotFoundError(
+            "Не найден TTF-шрифт с кириллицей. "
+            "Нужны DejaVuSans.ttf и DejaVuSans-Bold.ttf "
+            "в системе или в папке ./fonts/"
+        )
+
+    if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont("DejaVuSans", regular_path))
+
+    if "DejaVuSans-Bold" not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", bold_path))
+
+    return "DejaVuSans", "DejaVuSans-Bold"
 
 def _calc_key(file_bytes: bytes, date_from: dt.date, date_to: dt.date) -> str:
     h = hashlib.sha256()
